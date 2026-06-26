@@ -42,6 +42,7 @@ export class Player {
   invuln = 0;
   sprinting = false;
   dead = false;
+  creative = false; // creative mode: no damage, no hunger
 
   constructor(reg: Registry) {
     this.reg = reg;
@@ -129,7 +130,7 @@ export class Player {
   }
 
   damage(amt: number) {
-    if (this.invuln > 0 || this.dead) return;
+    if (this.creative || this.invuln > 0 || this.dead) return;
     this.health = Math.max(0, this.health - amt);
     this.hurtFlash = 0.6;
     this.invuln = 0.5;
@@ -229,42 +230,45 @@ export class Player {
       if (this.collides(world, probe)) this.onGround = true;
     }
 
-    // lava damage
-    const feetBlock = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.1), Math.floor(this.pos.z));
-    if (feetBlock === B.LAVA) this.damage(dt * 4);
+    // lava damage (skip in creative)
+    if (!this.creative) {
+      const feetBlock = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.1), Math.floor(this.pos.z));
+      if (feetBlock === B.LAVA) this.damage(dt * 4);
+    }
 
-    // drowning
-    if (eyeWater) {
+    // drowning (skip in creative)
+    if (!this.creative && eyeWater) {
       this.airTimer += dt;
       if (this.airTimer > 12) {
         this.damage(2);
         this.airTimer = 8;
       }
-    } else {
+    } else if (!this.creative) {
       this.airTimer = 0;
     }
 
-    // hunger
+    // hunger (skip in creative)
+    if (!this.creative) {
+      const moving = len > 0;
+      this.hungerTimer += dt * (this.sprinting ? 0.3 : moving ? 0.1 : 0.04);
+      if (this.hungerTimer > 1) {
+        this.hunger = Math.max(0, this.hunger - 0.1);
+        this.hungerTimer = 0;
+      }
+      if (this.hunger <= 0) {
+        this.starveTimer += dt;
+        if (this.starveTimer > 4) { this.damage(1); this.starveTimer = 0; }
+      } else {
+        this.starveTimer = 0;
+      }
+      if (this.hunger >= 18 && this.health < this.maxHealth) {
+        this.regenTimer += dt;
+        if (this.regenTimer > 0.5) { this.heal(1); this.regenTimer = 0; this.hunger = Math.max(0, this.hunger - 0.5); }
+      } else {
+        this.regenTimer = 0;
+      }
+    }
     const moving = len > 0;
-    this.hungerTimer += dt * (this.sprinting ? 0.6 : moving ? 0.2 : 0.06);
-    if (this.hungerTimer > 1) {
-      this.hunger = Math.max(0, this.hunger - 0.2);
-      this.hungerTimer = 0;
-    }
-    // starvation (separate timer from regen)
-    if (this.hunger <= 0) {
-      this.starveTimer += dt;
-      if (this.starveTimer > 4) { this.damage(1); this.starveTimer = 0; }
-    } else {
-      this.starveTimer = 0;
-    }
-    // health regen (only when well-fed, uses its own timer)
-    if (this.hunger >= 18 && this.health < this.maxHealth) {
-      this.regenTimer += dt;
-      if (this.regenTimer > 3) { this.heal(1); this.regenTimer = 0; this.hunger = Math.max(0, this.hunger - 1); }
-    } else {
-      this.regenTimer = 0;
-    }
 
     // head bob
     if (moving && this.onGround && !this.flying) {

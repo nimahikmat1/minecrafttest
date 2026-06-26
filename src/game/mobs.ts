@@ -78,14 +78,15 @@ export class Projectile {
     const sdt = dt / steps;
     for (let i = 0; i < steps; i++) {
       this.pos.addScaledVector(this.vel, sdt);
-      // collision with terrain
-      const b = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y), Math.floor(this.pos.z));
-      if (b !== B.AIR) return false;
-      // collision with player
-      const dx = this.pos.x - player.pos.x;
-      const dy = this.pos.y - (player.pos.y + 0.9);
-      const dz = this.pos.z - player.pos.z;
-      if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.9 && Math.abs(dz) < 0.4) {
+      // collision with terrain (only solid blocks, not water/plants)
+      const bx = Math.floor(this.pos.x), by = Math.floor(this.pos.y), bz = Math.floor(this.pos.z);
+      const b = world.getBlock(bx, by, bz);
+      if (b !== B.AIR && this.reg.getBlock(b).solid) return false;
+      // collision with player (proper AABB check)
+      const hw = 0.3; // player half-width
+      if (Math.abs(this.pos.x - player.pos.x) < hw + 0.15 &&
+          this.pos.y > player.pos.y && this.pos.y < player.pos.y + player.height &&
+          Math.abs(this.pos.z - player.pos.z) < hw + 0.15) {
         player.damage(2);
         return false;
       }

@@ -34,7 +34,7 @@ export default function Home() {
 
   const eng = () => engineRef.current;
 
-  const newGame = () => { eng()?.newGame(); setStarted(true); };
+  const newGame = (mode: 'survival' | 'creative' = 'survival') => { eng()?.newGame(undefined, mode); setStarted(true); };
   const continueGame = () => { if (eng()?.loadAutosaveIfExists()) { setStarted(true); } };
   const onImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -98,6 +98,13 @@ export default function Home() {
             </div>
           )}
 
+          {/* hotbar item name (shown briefly when switching slots) */}
+          {snap.hotbarName && (
+            <div style={{ position: 'absolute', left: '50%', bottom: 90, transform: 'translateX(-50%)', color: '#fff', textShadow: '1px 1px 0 #000, 2px 2px 0 #000', fontSize: 16, fontWeight: 700, pointerEvents: 'none' }}>
+              {snap.hotbarName}
+            </div>
+          )}
+
           {/* hotbar + stats (bottom center, Minecraft layout) */}
           <div style={{ position: 'absolute', left: '50%', bottom: 8, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, pointerEvents: 'none' }}>
             {/* air bubbles (shown when underwater) */}
@@ -108,15 +115,17 @@ export default function Home() {
                 ))}
               </div>
             )}
-            {/* health + hunger row */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', width: 9 * 46 + 8 * 2, padding: '0 2px' }}>
-              <div style={{ display: 'flex', gap: 1 }}>
-                {hearts(snap.health).map((h, i) => <Heart key={i} full={h} />)}
+            {/* health + hunger row (survival only) */}
+            {snap.gameMode === 'survival' && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', width: 9 * 46 + 8 * 2, padding: '0 2px' }}>
+                <div style={{ display: 'flex', gap: 1 }}>
+                  {hearts(snap.health).map((h, i) => <Heart key={i} full={h} />)}
+                </div>
+                <div style={{ display: 'flex', gap: 1 }}>
+                  {hearts(snap.hunger).map((h, i) => <Food key={10 - 1 - i} full={h} />)}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 1 }}>
-                {hearts(snap.hunger).map((h, i) => <Food key={10 - 1 - i} full={h} />)}
-              </div>
-            </div>
+            )}
             {/* hotbar */}
             <div style={{ display: 'flex', gap: 2, padding: 3, background: 'rgba(0,0,0,0.5)', border: '2px solid #1a1a1a', boxShadow: 'inset 2px 2px 0 #0008, inset -2px -2px 0 #fff2' }}>
               {snap.hotbar.map((it, i) => (
@@ -155,18 +164,30 @@ export default function Home() {
   );
 }
 
-function StartScreen({ hasAutosave, onNew, onContinue, onImport }: { hasAutosave: boolean; onNew: () => void; onContinue: () => void; onImport: () => void }) {
+function StartScreen({ hasAutosave, onNew, onContinue, onImport }: { hasAutosave: boolean; onNew: (mode: 'survival' | 'creative') => void; onContinue: () => void; onImport: () => void }) {
+  const [showModes, setShowModes] = useState(false);
   return (
-    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(5,8,20,0.85)', color: '#fff', gap: 16 }}>
-      <h1 style={{ fontSize: 42, letterSpacing: 4, textShadow: '3px 3px 0 #000', margin: 0, color: '#7fd0ff' }}>VOXELCRAFT</h1>
-      <p style={{ margin: 0, opacity: 0.8, fontSize: 13 }}>A browser-based voxel sandbox</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
-        <MenuButton onClick={onNew}>New World</MenuButton>
-        {hasAutosave && <MenuButton onClick={onContinue}>Continue</MenuButton>}
-        <MenuButton onClick={onImport}>Import Save</MenuButton>
-      </div>
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(5,8,20,0.9)', color: '#fff', gap: 16 }}>
+      <div style={{ fontSize: 56, letterSpacing: 6, textShadow: '4px 4px 0 #000', margin: 0, color: '#e8e8e8', fontWeight: 800, fontFamily: 'monospace' }}>VOXELCRAFT</div>
+      <p style={{ margin: 0, opacity: 0.7, fontSize: 13 }}>A browser-based voxel sandbox</p>
+      {!showModes ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+          <MenuButton onClick={() => setShowModes(true)}>New World</MenuButton>
+          {hasAutosave && <MenuButton onClick={onContinue}>Continue</MenuButton>}
+          <MenuButton onClick={onImport}>Import Save</MenuButton>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16, alignItems: 'center' }}>
+          <div style={{ fontSize: 16, marginBottom: 4 }}>Select Game Mode</div>
+          <MenuButton onClick={() => onNew('survival')}>Survival</MenuButton>
+          <div style={{ fontSize: 11, opacity: 0.5, textAlign: 'center', maxWidth: 200 }}>Mine, craft, survive. Hunger and health matter. No flying.</div>
+          <MenuButton onClick={() => onNew('creative')}>Creative</MenuButton>
+          <div style={{ fontSize: 11, opacity: 0.5, textAlign: 'center', maxWidth: 200 }}>Unlimited blocks, flying, no damage. Build freely.</div>
+          <MenuButton onClick={() => setShowModes(false)}>Back</MenuButton>
+        </div>
+      )}
       <div style={{ position: 'absolute', bottom: 16, fontSize: 11, opacity: 0.6, textAlign: 'center' }}>
-        Tip: Click the game to lock the mouse. Press E for inventory, Esc to pause, F to fly.
+        Click the game to lock the mouse · WASD move · E inventory · Esc pause
       </div>
     </div>
   );
@@ -217,10 +238,77 @@ function PauseOverlay({ engine, snap, dayLen, setDayLen, fileRef, onImport, onQu
 function InventoryOverlay({ snap, engine, clickSlot, mouse }: {
   snap: EngineSnapshot; engine: VoxelEngine; clickSlot: (id: number, button: number) => void; mouse: { x: number; y: number }; dayLen: number; setDayLen: (n: number) => void;
 }) {
+  const [tooltip, setTooltip] = useState<string | null>(null);
+
   const slot = (id: number, item: ItemStack | null, size = 44, selected = false) => (
     <Slot engine={engine} item={item} id={id} selected={selected} onClick={clickSlot} size={size} />
   );
 
+  const slotWithTooltip = (id: number, item: ItemStack | null, size = 44, selected = false) => (
+    <div
+      key={id}
+      onMouseEnter={() => { if (item) setTooltip(engine.itemName(item.item)); }}
+      onMouseLeave={() => setTooltip(null)}
+    >
+      <Slot engine={engine} item={item} id={id} selected={selected} onClick={clickSlot} size={size} />
+    </div>
+  );
+
+  // Creative mode inventory
+  if (snap.gameMode === 'creative' && !snap.furnaceOpen) {
+    return (
+      <div
+        onContextMenu={(e) => e.preventDefault()}
+        style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.55)' }}
+      >
+        <div style={{ background: 'rgba(30,30,38,0.96)', border: '2px solid #000', padding: 16, color: '#fff', boxShadow: 'inset 2px 2px 0 #fff3, inset -2px -2px 0 #0006', maxWidth: '90vw' }}>
+          <div style={{ textAlign: 'center', fontWeight: 700, marginBottom: 10, letterSpacing: 2, fontSize: 16 }}>CREATIVE INVENTORY</div>
+          {/* Creative item grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2, maxHeight: '320px', overflowY: 'auto', padding: 4, background: 'rgba(0,0,0,0.3)' }}>
+            {snap.creativeItems.map((ci, i) => (
+              <div
+                key={i}
+                onMouseEnter={() => setTooltip(ci.name)}
+                onMouseLeave={() => setTooltip(null)}
+                onMouseDown={(e) => { e.preventDefault(); if (e.button === 0) { engine.giveCreativeItem(ci.item); setTooltip('Added: ' + ci.name); } }}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{
+                  width: 44, height: 44, background: 'rgba(120,120,120,0.4)', border: '2px solid #2a2a2a',
+                  boxShadow: 'inset -2px -2px 0 #0006, inset 2px 2px 0 #fff3',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxSizing: 'border-box',
+                }}
+              >
+                <ItemIcon engine={engine} item={{ item: ci.item, count: 1 }} size={32} />
+              </div>
+            ))}
+          </div>
+          {/* Player hotbar */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2, marginTop: 8 }}>
+            {snap.inventory.slice(0, 9).map((it, i) => slotWithTooltip(i, it, 44, i === snap.selected))}
+          </div>
+          <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, opacity: 0.6 }}>
+            Click an item to add it to your inventory · Press E or Esc to close
+          </div>
+        </div>
+
+        {/* tooltip */}
+        {tooltip && (
+          <div style={{ position: 'fixed', left: mouse.x + 14, top: mouse.y + 14, background: 'rgba(20,20,28,0.95)', border: '1px solid #000', padding: '4px 8px', color: '#fff', fontSize: 12, pointerEvents: 'none', zIndex: 60, textShadow: '1px 1px 0 #000' }}>
+            {tooltip}
+          </div>
+        )}
+
+        {/* held item follows cursor */}
+        {snap.held && (
+          <div style={{ position: 'fixed', left: mouse.x - 18, top: mouse.y - 18, pointerEvents: 'none', zIndex: 50 }}>
+            <ItemIcon engine={engine} item={snap.held} size={36} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Survival inventory
   return (
     <div
       onContextMenu={(e) => e.preventDefault()}
@@ -243,14 +331,10 @@ function InventoryOverlay({ snap, engine, clickSlot, mouse }: {
           {/* Right: player inventory */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2 }}>
-              {snap.inventory.slice(9, 36).map((it, i) => (
-                <div key={i}>{slot(9 + i, it)}</div>
-              ))}
+              {snap.inventory.slice(9, 36).map((it, i) => slotWithTooltip(9 + i, it))}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2, marginTop: 4 }}>
-              {snap.inventory.slice(0, 9).map((it, i) => (
-                <div key={i}>{slot(i, it, 44, i === snap.selected)}</div>
-              ))}
+              {snap.inventory.slice(0, 9).map((it, i) => slotWithTooltip(i, it, 44, i === snap.selected))}
             </div>
           </div>
         </div>
@@ -258,6 +342,13 @@ function InventoryOverlay({ snap, engine, clickSlot, mouse }: {
           Left-click: pick up / merge · Right-click: split / place one · Press E or Esc to close
         </div>
       </div>
+
+      {/* tooltip */}
+      {tooltip && (
+        <div style={{ position: 'fixed', left: mouse.x + 14, top: mouse.y + 14, background: 'rgba(20,20,28,0.95)', border: '1px solid #000', padding: '4px 8px', color: '#fff', fontSize: 12, pointerEvents: 'none', zIndex: 60, textShadow: '1px 1px 0 #000' }}>
+          {tooltip}
+        </div>
+      )}
 
       {/* held item follows cursor */}
       {snap.held && (

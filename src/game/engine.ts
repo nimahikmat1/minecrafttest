@@ -38,6 +38,10 @@ export interface EngineSnapshot {
   eyeInWater: boolean;
   air: number; // 0-10 air bubbles
   dead: boolean;
+  gameMode: 'survival' | 'creative';
+  hotbarName: string | null;
+  creativeItems: { item: number; name: string }[];
+  creativePage: number;
 }
 
 export class VoxelEngine {
@@ -63,6 +67,12 @@ export class VoxelEngine {
   time = 0; // seconds since start of day cycle (wraps dayLength)
   dayLength = 600; // 10 minutes default
   renderDistance = 6;
+  gameMode: 'survival' | 'creative' = 'survival';
+  creativePage = 0;
+  hotbarNameTimer = 0;
+  hotbarName: string | null = null;
+  torchLights: THREE.PointLight[] = [];
+  maxTorchLights = 8;
 
   paused = false;
   inventoryOpen = false;
@@ -89,7 +99,7 @@ export class VoxelEngine {
   viewModelScene!: THREE.Scene;
   viewModelCamera!: THREE.PerspectiveCamera;
   handGroup!: THREE.Group;
-  armMesh!: THREE.Mesh;
+  armMesh!: THREE.Object3D;
   itemMesh: THREE.Mesh | null = null;
   lastSelectedItem: number = -2;
   swingT = 0;
@@ -158,21 +168,33 @@ export class VoxelEngine {
     this.viewModelScene = new THREE.Scene();
     this.viewModelCamera = new THREE.PerspectiveCamera(70, container.clientWidth / container.clientHeight, 0.01, 10);
     this.viewModelCamera.position.set(0, 0, 0);
-    const vmAmbient = new THREE.AmbientLight(0xffffff, 0.7);
-    const vmDir = new THREE.DirectionalLight(0xffffff, 0.6);
+    const vmAmbient = new THREE.AmbientLight(0xffffff, 0.85);
+    const vmDir = new THREE.DirectionalLight(0xffffff, 0.5);
     vmDir.position.set(0.5, 1, 0.8);
     this.viewModelScene.add(vmAmbient);
     this.viewModelScene.add(vmDir);
     this.handGroup = new THREE.Group();
     this.viewModelScene.add(this.handGroup);
-    // arm (hand) — skin-toned box
-    const armGeo = new THREE.BoxGeometry(0.16, 0.16, 0.45);
+    // arm (hand) — Minecraft-style: a proper arm model with sleeve
+    // arm is 4x4x12 pixels = 0.25 x 0.25 x 0.75 blocks, positioned bottom-right
+    const armGroup = new THREE.Group();
+    // main arm body (skin tone)
+    const armGeo = new THREE.BoxGeometry(0.25, 0.75, 0.25);
     const armMat = new THREE.MeshLambertMaterial({ color: 0xe8b890 });
     this.armMesh = new THREE.Mesh(armGeo, armMat);
-    this.armMesh.position.set(0.02, -0.16, -0.18);
-    this.armMesh.rotation.x = -Math.PI / 6;
-    this.handGroup.add(this.armMesh);
-    this.handGroup.position.set(0.32, -0.30, -0.55);
+    this.armMesh.position.set(0, -0.375, 0); // pivot at top
+    armGroup.add(this.armMesh);
+    // sleeve (shirt color)
+    const sleeveGeo = new THREE.BoxGeometry(0.26, 0.3, 0.26);
+    const sleeveMat = new THREE.MeshLambertMaterial({ color: 0x4a7ac0 });
+    const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
+    sleeve.position.set(0, -0.15, 0);
+    armGroup.add(sleeve);
+    armGroup.position.set(0.28, -0.25, -0.45);
+    armGroup.rotation.x = Math.PI * 0.35; // arm hangs down-forward
+    this.armMesh = armGroup;
+    this.handGroup.add(armGroup);
+    this.handGroup.position.set(0, 0, 0);
 
     // starter items
     this.giveStarterItems();
@@ -211,22 +233,21 @@ export class VoxelEngine {
   }
 
   private giveStarterItems() {
-    // give a wood pickaxe and a few torches to start exploring
-    this.inv.add({ item: I.WOOD_PICKAXE, count: 1, durability: 60 });
-    this.inv.add({ item: B.OAK_PLANKS, count: 16 });
-    this.inv.add({ item: B.TORCH, count: 16 });
-    this.inv.add({ item: I.APPLE, count: 5 });
-    this.inv.add({ item: B.CRAFTING_TABLE, count: 1 });
+    // survival: no starter items (like Minecraft)
+    // creative: handled separately via creative inventory
   }
 
   // ----------------- new game / load -----------------
-  newGame(seed?: number) {
+  newGame(seed?: number, mode: 'survival' | 'creative' = 'survival') {
     this.seed = seed ?? ((Math.random() * 2 ** 31) | 0);
+    this.gameMode = mode;
     this.world = new World(this.seed, this.reg);
     this.scene.remove(this.world.group);
     this.scene.add(this.world.group);
     this.player = new Player(this.reg);
     this.inv = new Inventory(this.reg, 36);
+    this.player.flying = (mode === 'creative');
+    this.player.creative = (mode === 'creative');
     this.clearMobs();
     this.giveStarterItems();
     this.spawnOnLand();
@@ -234,7 +255,7 @@ export class VoxelEngine {
     for (let i = 0; i < 60; i++) this.world.updateMeshes(6);
     this.time = 0;
     this.markDirty();
-    this.setMessage('New world created. Seed: ' + this.seed);
+    this.setMessage(mode === 'creative' ? 'Creative mode' : 'Survival mode');
   }
 
   loadGame(data: SaveData) {
@@ -341,8 +362,18 @@ export class VoxelEngine {
     e.preventDefault();
     const dir = Math.sign(e.deltaY);
     this.selected = (this.selected + dir + 9) % 9;
+    this.showHotbarName();
     this.markDirty();
   };
+  private showHotbarName() {
+    const stack = this.inv.hotbar(this.selected);
+    if (stack) {
+      this.hotbarName = this.itemName(stack.item);
+    } else {
+      this.hotbarName = null;
+    }
+    this.hotbarNameTimer = 2.0;
+  }
   private onKeyDown = (e: KeyboardEvent) => {
     const code = e.code;
     if (code === 'KeyE') {
@@ -358,9 +389,13 @@ export class VoxelEngine {
     if (this.paused || this.inventoryOpen) return;
     if (code.startsWith('Digit')) {
       const n = parseInt(code.slice(5));
-      if (n >= 1 && n <= 9) { this.selected = n - 1; this.markDirty(); return; }
+      if (n >= 1 && n <= 9) { this.selected = n - 1; this.showHotbarName(); this.markDirty(); return; }
     }
-    if (code === 'KeyF') { this.player.flying = !this.player.flying; this.setMessage(this.player.flying ? 'Fly ON' : 'Fly OFF'); this.markDirty(); return; }
+    if (code === 'KeyF') {
+      if (this.gameMode === 'creative') { this.player.flying = !this.player.flying; this.setMessage(this.player.flying ? 'Fly ON' : 'Fly OFF'); }
+      else { this.setMessage('Fly is only available in Creative mode'); }
+      this.markDirty(); return;
+    }
     this.keys.add(code);
     this.updateInput();
   };
@@ -611,6 +646,8 @@ export class VoxelEngine {
   private miningSpeed(blockId: number): number {
     const bt = this.reg.getBlock(blockId);
     if (bt.hardness < 0) return 0; // unbreakable (bedrock)
+    // creative: instant break
+    if (this.gameMode === 'creative') return 100;
     const stack = this.inv.hotbar(this.selected);
     let speed = 1;
     let correctTool = false;
@@ -620,11 +657,10 @@ export class VoxelEngine {
         if (item.toolType === bt.tool) { correctTool = true; speed = item.miningSpeed ?? 1; }
       }
     }
-    // base time = hardness * factor; if wrong tool for required-tier blocks, much slower and no drop later
     const tierOk = stack ? (this.reg.getItem(stack.item)?.toolTier ?? 0) >= bt.toolTier : bt.toolTier === 0;
     let time = bt.hardness * 1.5;
     if (correctTool) time /= speed;
-    else if (bt.tool !== 'none' && bt.toolTier > 0) time *= 5; // wrong tool penalty
+    else if (bt.tool !== 'none' && bt.toolTier > 0) time *= 5;
     if (!tierOk) time *= 3;
     return 1 / Math.max(0.05, time);
   }
@@ -653,13 +689,18 @@ export class VoxelEngine {
     const b = this.world.getBlock(x, y, z);
     const bt = this.reg.getBlock(b);
     if (b === B.AIR || bt.hardness < 0) return;
-    // tool tier check for drops
-    const stack = this.inv.hotbar(this.selected);
-    const tier = stack ? (this.reg.getItem(stack.item)?.toolTier ?? 0) : 0;
-    const tierOk = tier >= bt.toolTier;
     this.world.setBlock(x, y, z, B.AIR);
     this.spawnBreakParticles(x, y, z, bt.textures.side);
     this.playSound('break', bt.category);
+    // creative: instant break, no drops, no durability
+    if (this.gameMode === 'creative') {
+      this.markDirty();
+      return;
+    }
+    // survival: tool tier check for drops
+    const stack = this.inv.hotbar(this.selected);
+    const tier = stack ? (this.reg.getItem(stack.item)?.toolTier ?? 0) : 0;
+    const tierOk = tier >= bt.toolTier;
     if (tierOk) {
       for (const drop of bt.drops) {
         const count = drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
@@ -687,30 +728,30 @@ export class VoxelEngine {
 
   private useItem() {
     const stack = this.inv.hotbar(this.selected);
-    if (!stack) return;
-    const item = this.reg.getItem(stack.item);
-    if (!item) return;
-    this.swingT = this.swingDuration; // swing hand on use
-    // food
-    if (item.category === 'food' && this.player.health < this.player.maxHealth || (item.food && this.player.hunger < this.player.maxHunger)) {
-      if (item.food) {
-        this.player.feed(item.food);
-        this.inv.consumeOne(this.selected);
-        this.playSound('eat', 'food');
-        this.markDirty();
-        return;
-      }
+    const item = stack ? this.reg.getItem(stack.item) : null;
+    this.swingT = this.swingDuration;
+
+    // right-click on functional blocks opens their UI (even with empty hand)
+    if (this.target) {
+      const tb = this.world.getBlock(this.target.x, this.target.y, this.target.z);
+      if (tb === B.CRAFTING_TABLE) { this.openCraftingTable(); return; }
+      if (tb === B.FURNACE) { this.openFurnace(this.target.x, this.target.y, this.target.z); return; }
+    }
+
+    if (!stack || !item) return;
+
+    // food: can only eat if hunger is not full
+    if (item.category === 'food' && item.food) {
+      if (this.player.hunger >= this.player.maxHunger) return; // can't eat at full hunger
+      this.player.feed(item.food);
+      if (this.gameMode !== 'creative') this.inv.consumeOne(this.selected);
+      this.playSound('eat', 'food');
+      this.markDirty();
+      return;
     }
     // block placement
     if (item.block !== undefined) {
-      const b = item.block;
-      // if functional block and right-click on same type, open its UI instead
-      if (this.target) {
-        const tb = this.world.getBlock(this.target.x, this.target.y, this.target.z);
-        if (tb === B.CRAFTING_TABLE && b === B.CRAFTING_TABLE) { this.openCraftingTable(); return; }
-        if (tb === B.FURNACE && b === B.FURNACE) { this.openFurnace(this.target.x, this.target.y, this.target.z); return; }
-      }
-      this.placeBlock(b);
+      this.placeBlock(item.block);
     }
   }
 
@@ -733,7 +774,7 @@ export class VoxelEngine {
     }
     if (this.world.getBlock(px, py, pz) !== B.AIR) return;
     this.world.setBlock(px, py, pz, blockId);
-    this.inv.consumeOne(this.selected);
+    if (this.gameMode !== 'creative') this.inv.consumeOne(this.selected);
     this.placeFlash = { x: px, y: py, z: pz, t: 0.25 };
     this.playSound('place', bt.category);
     this.markDirty();
@@ -1004,6 +1045,9 @@ export class VoxelEngine {
     // day/night
     this.updateDayNight();
 
+    // torch lights
+    this.updateTorchLights();
+
     // hurt flash decay handled in player
 
     // autosave
@@ -1011,6 +1055,7 @@ export class VoxelEngine {
     if (this.autosaveTimer > 30) { this.autosaveTimer = 0; this.autosave(); }
 
     if (this.messageTimer > 0) { this.messageTimer -= dt; if (this.messageTimer <= 0) this.message = null; }
+    if (this.hotbarNameTimer > 0) { this.hotbarNameTimer -= dt; if (this.hotbarNameTimer <= 0) this.hotbarName = null; }
   }
 
   private updateTarget(eye: THREE.Vector3, dir: THREE.Vector3) {
@@ -1069,6 +1114,10 @@ export class VoxelEngine {
       eyeInWater: this.player.eyeInLiquid(this.world),
       air: Math.max(0, Math.ceil(10 - (this.player.airTimer / 12) * 10)),
       dead: this.player.dead,
+      gameMode: this.gameMode,
+      hotbarName: this.hotbarName,
+      creativeItems: this.getCreativeItems(),
+      creativePage: this.creativePage,
     };
     this.onState(s);
   }
@@ -1098,16 +1147,101 @@ export class VoxelEngine {
     } catch {}
   }
 
+  // ----------------- torch lighting -----------------
+  private updateTorchLights() {
+    // scan for light-emitting blocks near the player and attach point lights
+    const px = Math.floor(this.player.pos.x);
+    const py = Math.floor(this.player.pos.y);
+    const pz = Math.floor(this.player.pos.z);
+    const range = 8;
+    const found: { x: number; y: number; z: number; level: number }[] = [];
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dz = -range; dz <= range; dz++) {
+          const b = this.world.getBlock(px + dx, py + dy, pz + dz);
+          const bt = this.reg.getBlock(b);
+          if (bt.light > 0) {
+            found.push({ x: px + dx, y: py + dy, z: pz + dz, level: bt.light });
+          }
+        }
+      }
+    }
+    // sort by distance to player, take closest N
+    found.sort((a, b) => {
+      const da = (a.x - px) ** 2 + (a.y - py) ** 2 + (a.z - pz) ** 2;
+      const db = (b.x - px) ** 2 + (b.y - py) ** 2 + (b.z - pz) ** 2;
+      return da - db;
+    });
+    const maxLights = Math.min(this.maxTorchLights, found.length);
+    // ensure we have the right number of lights
+    while (this.torchLights.length < maxLights) {
+      const light = new THREE.PointLight(0xffaa55, 0, 8, 2);
+      this.scene.add(light);
+      this.torchLights.push(light);
+    }
+    while (this.torchLights.length > maxLights) {
+      const light = this.torchLights.pop()!;
+      this.scene.remove(light);
+    }
+    // update light positions and intensities
+    for (let i = 0; i < this.torchLights.length; i++) {
+      const t = found[i];
+      this.torchLights[i].position.set(t.x + 0.5, t.y + 0.7, t.z + 0.5);
+      this.torchLights[i].intensity = (t.level / 15) * 2.5;
+      // flicker
+      this.torchLights[i].intensity *= 0.9 + Math.sin(performance.now() * 0.01 + i) * 0.1;
+    }
+  }
+
   // ----------------- public UI actions -----------------
-  selectHotbar(i: number) { this.selected = i; this.markDirty(); }
+  selectHotbar(i: number) { this.selected = i; this.showHotbarName(); this.markDirty(); }
   setDayLength(s: number) { this.dayLength = s; this.markDirty(); }
-  toggleFly() { this.player.flying = !this.player.flying; this.markDirty(); }
+  toggleFly() {
+    if (this.gameMode === 'creative') { this.player.flying = !this.player.flying; }
+    this.markDirty();
+  }
   respawn() {
     this.player.health = this.player.maxHealth;
     this.player.hunger = this.player.maxHunger;
     this.player.dead = false;
     this.spawnOnLand();
     this.player.vel.set(0, 0, 0);
+    this.markDirty();
+  }
+
+  getCreativeItems(): { item: number; name: string }[] {
+    const items: { item: number; name: string }[] = [];
+    const perPage = 45;
+    let idx = 0;
+    const skip = this.creativePage * perPage;
+    // add all block items
+    for (const [blockId, bt] of this.reg.blocks) {
+      if (blockId === 0) continue; // skip air
+      if (idx >= skip && idx < skip + perPage) {
+        items.push({ item: blockId, name: bt.displayName });
+      }
+      idx++;
+    }
+    // add all non-block items
+    for (const [itemId, it] of this.reg.items) {
+      if (it.block !== undefined) continue; // skip block items (already added)
+      if (idx >= skip && idx < skip + perPage) {
+        items.push({ item: itemId, name: it.displayName });
+      }
+      idx++;
+    }
+    return items;
+  }
+
+  giveCreativeItem(itemId: number) {
+    const item = this.reg.getItem(itemId);
+    if (!item) return;
+    this.inv.add({ item: itemId, count: item.maxStack });
+    this.markDirty();
+  }
+
+  setCreativePage(page: number) {
+    this.creativePage = Math.max(0, page);
     this.markDirty();
   }
 
@@ -1154,46 +1288,45 @@ export class VoxelEngine {
     if (item.block !== undefined) {
       const bt = this.reg.getBlock(item.block);
       if (bt.render === 'cross') {
-        // torch / flower / plant: flat billboard plane with alphaTest
+        // torch / flower / plant: flat billboard with alphaTest
         const tile = bt.textures.side;
         const [u0, v0, u1, v1] = this.atlas.uv(tile);
-        const geo = new THREE.PlaneGeometry(0.22, 0.22);
+        const geo = new THREE.PlaneGeometry(0.3, 0.3);
         const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
-        // fix UV: plane default UVs are (0,1)(1,1)(0,0)(1,0) — map to atlas
         uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
         uvAttr.needsUpdate = true;
         const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
         if (bt.light > 0) mat.emissive = new THREE.Color(0xffaa33);
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(0.0, -0.04, -0.38);
-        mesh.rotation.set(0.1, -0.3, 0.0);
+        mesh.position.set(0.18, -0.05, -0.5);
+        mesh.rotation.set(0.0, -0.3, 0.0);
         this.itemMesh = mesh;
         this.handGroup.add(mesh);
         return;
       }
-      // 3D cube for block items (Minecraft scale: ~0.4 blocks)
+      // 3D cube for block items — Minecraft: block is ~0.375 blocks in hand
       const geo = buildItemCubeGeometry(this.reg, item.block);
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, side: THREE.FrontSide });
       if (bt.light > 0) mat.emissive = new THREE.Color(bt.light > 10 ? 0x332200 : 0x111100);
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.0, 0.0, -0.38);
-      mesh.rotation.set(0.2, -0.6, 0.05);
-      mesh.scale.setScalar(0.38);
+      mesh.position.set(0.18, -0.05, -0.55);
+      mesh.rotation.set(0.1, -0.8, 0.0);
+      mesh.scale.setScalar(0.4);
       this.itemMesh = mesh;
       this.handGroup.add(mesh);
     } else {
-      // flat plane for tools/items (Minecraft: tools are ~0.5 blocks tall in view)
+      // tools: flat plane, ~0.6 blocks tall, held at proper angle
       const tile = item.iconTile ?? 0;
       const [u0, v0, u1, v1] = this.atlas.uv(tile);
-      const geo = new THREE.PlaneGeometry(0.45, 0.45);
+      const geo = new THREE.PlaneGeometry(0.6, 0.6);
       const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
       uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
       uvAttr.needsUpdate = true;
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.05, -0.08, -0.45);
-      // rotate to look like it's being held (pointing forward and down)
-      mesh.rotation.set(0.0, -0.4, 0.1);
+      mesh.position.set(0.15, -0.15, -0.55);
+      // Minecraft tool hold angle: rotated so handle is in hand, head points forward
+      mesh.rotation.set(0.0, -0.5, 0.15);
       mesh.rotation.order = 'YXZ';
       this.itemMesh = mesh;
       this.handGroup.add(mesh);
@@ -1201,44 +1334,39 @@ export class VoxelEngine {
   }
 
   private updateViewModel(dt: number) {
-    // rebuild item mesh if selected slot changed
     const curItem = this.inv.hotbar(this.selected)?.item ?? -1;
     if (curItem !== this.lastSelectedItem) {
       this.rebuildItemMesh();
       this.lastSelectedItem = curItem;
+      this.showHotbarName();
     }
 
-    // swing timer
     if (this.swingT > 0) {
       this.swingT -= dt;
       if (this.swingT < 0) this.swingT = 0;
     }
-    // continuous swing while mining
     if (this.mouseDown.left && this.swingT <= 0) {
       this.swingT = this.swingDuration;
     }
 
-    // swing animation: sin curve 0 -> 1 -> 0
     const swingProgress = this.swingT > 0 ? 1 - (this.swingT / this.swingDuration) : 0;
-    const swingAngle = Math.sin(swingProgress * Math.PI) * 0.9;
+    const swingAngle = Math.sin(swingProgress * Math.PI) * 1.2;
 
-    // walk bob
     const bob = this.player.bobAmt;
-    const bobX = Math.cos(this.player.bobPhase) * 0.025 * bob;
-    const bobY = Math.sin(this.player.bobPhase * 2) * 0.018 * bob;
+    const bobX = Math.cos(this.player.bobPhase) * 0.03 * bob;
+    const bobY = Math.sin(this.player.bobPhase * 2) * 0.022 * bob;
 
-    // smooth view bob interpolation
     this.viewBobX += (bobX - this.viewBobX) * Math.min(1, 10 * dt);
     this.viewBobY += (bobY - this.viewBobY) * Math.min(1, 10 * dt);
 
-    // idle sway
     const t = performance.now() * 0.001;
-    const idleX = Math.sin(t * 1.3) * 0.006;
-    const idleY = Math.sin(t * 1.7) * 0.004;
+    const idleX = Math.sin(t * 1.3) * 0.008;
+    const idleY = Math.sin(t * 1.7) * 0.006;
 
-    this.handGroup.position.set(0.32 + this.viewBobX + idleX, -0.30 + this.viewBobY + idleY, -0.55);
-    this.handGroup.rotation.x = -swingAngle;
-    this.handGroup.rotation.z = Math.sin(t * 0.9) * 0.015;
+    // handGroup holds both arm and item; apply swing to the whole group
+    this.handGroup.position.set(this.viewBobX + idleX, this.viewBobY + idleY, 0);
+    this.handGroup.rotation.x = -swingAngle * 0.5;
+    this.handGroup.rotation.z = Math.sin(t * 0.9) * 0.02;
   }
 
   dispose() {
