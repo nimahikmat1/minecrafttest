@@ -66,7 +66,7 @@ export class VoxelEngine {
   seed = 0;
   time = 0; // seconds since start of day cycle (wraps dayLength)
   dayLength = 600; // 10 minutes default
-  renderDistance = 6;
+  renderDistance = 5; // reduced for performance
   gameMode: 'survival' | 'creative' = 'survival';
   creativePage = 0;
   hotbarNameTimer = 0;
@@ -126,7 +126,7 @@ export class VoxelEngine {
   init(container: HTMLElement) {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
@@ -166,33 +166,35 @@ export class VoxelEngine {
 
     // first-person view model scene (rendered on top of world)
     this.viewModelScene = new THREE.Scene();
-    // use a narrower FOV for the view model to avoid items appearing too large
-    this.viewModelCamera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.01, 10);
+    // Minecraft uses ~70 FOV but the view model is rendered separately with a custom projection.
+    // We use a narrower FOV (50) and position items further away to match Minecraft's look.
+    this.viewModelCamera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.01, 10);
     this.viewModelCamera.position.set(0, 0, 0);
-    const vmAmbient = new THREE.AmbientLight(0xffffff, 0.85);
-    const vmDir = new THREE.DirectionalLight(0xffffff, 0.5);
+    const vmAmbient = new THREE.AmbientLight(0xffffff, 0.9);
+    const vmDir = new THREE.DirectionalLight(0xffffff, 0.6);
     vmDir.position.set(0.5, 1, 0.8);
     this.viewModelScene.add(vmAmbient);
     this.viewModelScene.add(vmDir);
     this.handGroup = new THREE.Group();
     this.viewModelScene.add(this.handGroup);
-    // arm (hand) — Minecraft-style arm (4x4x12px = 0.25x0.25x0.75 blocks)
+    // arm (hand) — Minecraft-style arm, positioned at bottom-right
+    // Arm dimensions: 4x12x4 pixels = 0.25 x 0.75 x 0.25 blocks
     const armGroup = new THREE.Group();
-    const armGeo = new THREE.BoxGeometry(0.22, 0.7, 0.22);
+    const armGeo = new THREE.BoxGeometry(0.2, 0.6, 0.2);
     const armMat = new THREE.MeshLambertMaterial({ color: 0xe8b890 });
     const armMesh = new THREE.Mesh(armGeo, armMat);
-    armMesh.position.set(0, -0.35, 0); // pivot at top
+    armMesh.position.set(0, -0.3, 0); // pivot at top (shoulder)
     armGroup.add(armMesh);
     // sleeve (shirt color)
-    const sleeveGeo = new THREE.BoxGeometry(0.23, 0.28, 0.23);
+    const sleeveGeo = new THREE.BoxGeometry(0.21, 0.24, 0.21);
     const sleeveMat = new THREE.MeshLambertMaterial({ color: 0x4a7ac0 });
     const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
-    sleeve.position.set(0, -0.14, 0);
+    sleeve.position.set(0, -0.12, 0);
     armGroup.add(sleeve);
-    // position arm in bottom-right, angled forward
-    armGroup.position.set(0.32, -0.32, -0.55);
-    armGroup.rotation.x = Math.PI * 0.4; // arm hangs down-forward
-    armGroup.rotation.z = -0.15;
+    // position arm at bottom-right, angled so it points forward and down
+    armGroup.position.set(0.38, -0.42, -0.72);
+    armGroup.rotation.x = Math.PI * 0.42; // arm hangs down-forward
+    armGroup.rotation.z = -0.12;
     this.armMesh = armGroup;
     this.handGroup.add(armGroup);
 
@@ -1179,7 +1181,7 @@ export class VoxelEngine {
     this.updateDayNight();
 
     // torch lights
-    this.updateTorchLights();
+    this.updateTorchLights(dt);
 
     // hurt flash decay handled in player
 
@@ -1282,12 +1284,23 @@ export class VoxelEngine {
   }
 
   // ----------------- torch lighting -----------------
-  private updateTorchLights() {
+  private torchScanTimer = 0;
+  private updateTorchLights(dt: number) {
+    // only scan for light sources every 0.3s to save performance
+    this.torchScanTimer += dt;
+    if (this.torchScanTimer < 0.3) {
+      // still update flicker on existing lights
+      for (let i = 0; i < this.torchLights.length; i++) {
+        this.torchLights[i].intensity *= 0.9 + Math.sin(performance.now() * 0.01 + i) * 0.1;
+      }
+      return;
+    }
+    this.torchScanTimer = 0;
     // scan for light-emitting blocks near the player and attach point lights
     const px = Math.floor(this.player.pos.x);
     const py = Math.floor(this.player.pos.y);
     const pz = Math.floor(this.player.pos.z);
-    const range = 8;
+    const range = 6;
     const found: { x: number; y: number; z: number; level: number }[] = [];
     for (let dx = -range; dx <= range; dx++) {
       for (let dy = -3; dy <= 3; dy++) {
@@ -1425,40 +1438,40 @@ export class VoxelEngine {
         // torch / flower / plant: flat billboard with alphaTest
         const tile = bt.textures.side;
         const [u0, v0, u1, v1] = this.atlas.uv(tile);
-        const geo = new THREE.PlaneGeometry(0.18, 0.18);
+        const geo = new THREE.PlaneGeometry(0.14, 0.14);
         const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
         uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
         uvAttr.needsUpdate = true;
         const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
         if (bt.light > 0) mat.emissive = new THREE.Color(0xffaa33);
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(0.22, -0.18, -0.6);
+        mesh.position.set(0.28, -0.28, -0.85);
         mesh.rotation.set(0.0, -0.2, 0.0);
         this.itemMesh = mesh;
         this.handGroup.add(mesh);
         return;
       }
-      // 3D cube for block items — Minecraft: ~0.35 blocks, positioned in hand
+      // 3D cube for block items — Minecraft: block is ~0.35 blocks in hand, positioned further away
       const geo = buildItemCubeGeometry(this.reg, item.block);
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, side: THREE.FrontSide });
       if (bt.light > 0) mat.emissive = new THREE.Color(bt.light > 10 ? 0x332200 : 0x111100);
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.22, -0.15, -0.65);
+      mesh.position.set(0.28, -0.22, -0.85);
       mesh.rotation.set(0.15, -0.7, 0.05);
-      mesh.scale.setScalar(0.3);
+      mesh.scale.setScalar(0.22);
       this.itemMesh = mesh;
       this.handGroup.add(mesh);
     } else {
-      // tools: flat plane, ~0.4 blocks, held at proper angle
+      // tools: flat plane, ~0.3 blocks, held at proper angle
       const tile = item.iconTile ?? 0;
       const [u0, v0, u1, v1] = this.atlas.uv(tile);
-      const geo = new THREE.PlaneGeometry(0.4, 0.4);
+      const geo = new THREE.PlaneGeometry(0.3, 0.3);
       const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
       uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
       uvAttr.needsUpdate = true;
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.2, -0.22, -0.6);
+      mesh.position.set(0.25, -0.28, -0.8);
       mesh.rotation.set(0.0, -0.4, 0.1);
       mesh.rotation.order = 'YXZ';
       this.itemMesh = mesh;
