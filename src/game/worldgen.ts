@@ -38,15 +38,20 @@ export class WorldGen {
   // Compute biome + height + surface block for a column.
   column(x: number, z: number): ColumnInfo {
     const n = this.noise;
-    const c = n.fbm2(x * 0.0075, z * 0.0075, 4); // continental
-    const hills = n.fbm2(x * 0.03 + 500, z * 0.03, 3);
-    const mtn = n.fbm2(x * 0.0016 + 900, z * 0.0016, 3); // large-scale mountain regions
-    const temp = n.fbm2(x * 0.004 + 100, z * 0.004, 3);
-    const moist = n.fbm2(x * 0.004 + 200, z * 0.004, 3);
+    // multiple noise layers for varied terrain
+    const c = n.fbm2(x * 0.006, z * 0.006, 4); // continental shape
+    const hills = n.fbm2(x * 0.025 + 500, z * 0.025, 3); // local hills
+    const ridge = Math.abs(n.fbm2(x * 0.008 + 300, z * 0.008, 4)); // ridge noise for mountains
+    const mtn = n.fbm2(x * 0.0014 + 900, z * 0.0014, 3); // large-scale mountain regions
+    const temp = n.fbm2(x * 0.003 + 100, z * 0.003, 3);
+    const moist = n.fbm2(x * 0.003 + 200, z * 0.003, 3);
 
-    let baseHeight = SEA_LEVEL + c * 7 + hills * 4;
+    let baseHeight = SEA_LEVEL + c * 8 + hills * 5;
     baseHeight = Math.max(2, baseHeight);
-    const mountainRaise = mtn > 0.45 ? Math.min(110, (mtn - 0.45) * 210) : 0;
+    // more dramatic mountains: use ridge noise for sharp peaks
+    const mountainMask = mtn > 0.3 ? Math.min(1, (mtn - 0.3) / 0.4) : 0;
+    const ridgeHeight = Math.pow(1 - ridge, 2) * 80 * mountainMask; // sharp ridges
+    const mountainRaise = mountainMask * 30 + ridgeHeight;
     let height = Math.floor(baseHeight + mountainRaise);
     if (height < 1) height = 1;
     if (height > CHUNK_HEIGHT - 8) height = CHUNK_HEIGHT - 8;
@@ -54,13 +59,13 @@ export class WorldGen {
     let biome: Biome;
     if (height <= SEA_LEVEL) {
       biome = Biome.OCEAN;
-    } else if (mountainRaise > 25) {
+    } else if (mountainRaise > 20) {
       biome = Biome.MOUNTAINS;
-    } else if (temp > 0.42) {
+    } else if (temp > 0.4) {
       biome = Biome.DESERT;
-    } else if (temp < -0.38) {
+    } else if (temp < -0.35) {
       biome = Biome.TUNDRA;
-    } else if (moist > 0.12) {
+    } else if (moist > 0.1) {
       biome = Biome.FOREST;
     } else {
       biome = Biome.PLAINS;
@@ -70,7 +75,7 @@ export class WorldGen {
     if (biome === Biome.OCEAN) surface = B.SAND;
     else if (biome === Biome.DESERT) surface = B.SAND;
     else if (biome === Biome.TUNDRA) surface = B.SNOW;
-    else if (biome === Biome.MOUNTAINS) surface = height > 88 ? B.SNOW : (height > 74 ? B.STONE : B.GRASS);
+    else if (biome === Biome.MOUNTAINS) surface = height > 92 ? B.SNOW : (height > 78 ? B.STONE : B.GRASS);
     else surface = B.GRASS;
 
     return { biome, height, surface };
@@ -122,10 +127,19 @@ export class WorldGen {
           }
         }
 
-        // water fill for ocean/lake columns
+        // water fill for ocean/lake columns — fill any air below sea level
         if (h < SEA_LEVEL) {
           for (let y = h + 1; y <= SEA_LEVEL; y++) {
             if (chunk.blocks[idx(lx, y, lz)] === B.AIR) {
+              chunk.blocks[idx(lx, y, lz)] = B.WATER;
+            }
+          }
+        }
+        // also fill caves that are below sea level and connected to ocean (simple heuristic)
+        if (h <= SEA_LEVEL + 1) {
+          for (let y = 1; y <= SEA_LEVEL; y++) {
+            if (chunk.blocks[idx(lx, y, lz)] === B.AIR && y < h) {
+              // check if this is a cave near water — fill with water if below sea level
               chunk.blocks[idx(lx, y, lz)] = B.WATER;
             }
           }

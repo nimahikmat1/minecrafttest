@@ -166,7 +166,8 @@ export class VoxelEngine {
 
     // first-person view model scene (rendered on top of world)
     this.viewModelScene = new THREE.Scene();
-    this.viewModelCamera = new THREE.PerspectiveCamera(70, container.clientWidth / container.clientHeight, 0.01, 10);
+    // use a narrower FOV for the view model to avoid items appearing too large
+    this.viewModelCamera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.01, 10);
     this.viewModelCamera.position.set(0, 0, 0);
     const vmAmbient = new THREE.AmbientLight(0xffffff, 0.85);
     const vmDir = new THREE.DirectionalLight(0xffffff, 0.5);
@@ -175,26 +176,25 @@ export class VoxelEngine {
     this.viewModelScene.add(vmDir);
     this.handGroup = new THREE.Group();
     this.viewModelScene.add(this.handGroup);
-    // arm (hand) — Minecraft-style: a proper arm model with sleeve
-    // arm is 4x4x12 pixels = 0.25 x 0.25 x 0.75 blocks, positioned bottom-right
+    // arm (hand) — Minecraft-style arm (4x4x12px = 0.25x0.25x0.75 blocks)
     const armGroup = new THREE.Group();
-    // main arm body (skin tone)
-    const armGeo = new THREE.BoxGeometry(0.25, 0.75, 0.25);
+    const armGeo = new THREE.BoxGeometry(0.22, 0.7, 0.22);
     const armMat = new THREE.MeshLambertMaterial({ color: 0xe8b890 });
-    this.armMesh = new THREE.Mesh(armGeo, armMat);
-    this.armMesh.position.set(0, -0.375, 0); // pivot at top
-    armGroup.add(this.armMesh);
+    const armMesh = new THREE.Mesh(armGeo, armMat);
+    armMesh.position.set(0, -0.35, 0); // pivot at top
+    armGroup.add(armMesh);
     // sleeve (shirt color)
-    const sleeveGeo = new THREE.BoxGeometry(0.26, 0.3, 0.26);
+    const sleeveGeo = new THREE.BoxGeometry(0.23, 0.28, 0.23);
     const sleeveMat = new THREE.MeshLambertMaterial({ color: 0x4a7ac0 });
     const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
-    sleeve.position.set(0, -0.15, 0);
+    sleeve.position.set(0, -0.14, 0);
     armGroup.add(sleeve);
-    armGroup.position.set(0.28, -0.25, -0.45);
-    armGroup.rotation.x = Math.PI * 0.35; // arm hangs down-forward
+    // position arm in bottom-right, angled forward
+    armGroup.position.set(0.32, -0.32, -0.55);
+    armGroup.rotation.x = Math.PI * 0.4; // arm hangs down-forward
+    armGroup.rotation.z = -0.15;
     this.armMesh = armGroup;
     this.handGroup.add(armGroup);
-    this.handGroup.position.set(0, 0, 0);
 
     // starter items
     this.giveStarterItems();
@@ -374,6 +374,7 @@ export class VoxelEngine {
     }
     this.hotbarNameTimer = 2.0;
   }
+  private lastJumpTap = 0;
   private onKeyDown = (e: KeyboardEvent) => {
     const code = e.code;
     if (code === 'KeyE') {
@@ -395,6 +396,16 @@ export class VoxelEngine {
       if (this.gameMode === 'creative') { this.player.flying = !this.player.flying; this.setMessage(this.player.flying ? 'Fly ON' : 'Fly OFF'); }
       else { this.setMessage('Fly is only available in Creative mode'); }
       this.markDirty(); return;
+    }
+    // double-tap Space to toggle fly (Minecraft creative)
+    if (code === 'Space' && this.gameMode === 'creative') {
+      const now = performance.now();
+      if (now - this.lastJumpTap < 300) {
+        this.player.flying = !this.player.flying;
+        this.setMessage(this.player.flying ? 'Fly ON' : 'Fly OFF');
+        this.markDirty();
+      }
+      this.lastJumpTap = now;
     }
     this.keys.add(code);
     this.updateInput();
@@ -704,7 +715,10 @@ export class VoxelEngine {
     if (tierOk) {
       for (const drop of bt.drops) {
         const count = drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
-        if (count > 0) this.inv.add({ item: drop.item, count });
+        if (count > 0) {
+          // spawn dropped item entity instead of adding directly to inventory
+          this.spawnDrop(x + 0.5, y + 0.5, z + 0.5, drop.item, count);
+        }
       }
     }
     // tool durability
@@ -712,6 +726,102 @@ export class VoxelEngine {
       this.useToolDurability(this.selected);
     }
     this.markDirty();
+  }
+
+  // ----------------- dropped items -----------------
+  private drops: { mesh: THREE.Mesh; vel: THREE.Vector3; item: number; count: number; life: number; pickupDelay: number }[] = [];
+
+  private spawnDrop(x: number, y: number, z: number, item: number, count: number) {
+    // create a small spinning cube mesh with the item's texture
+    const it = this.reg.getItem(item);
+    if (!it) return;
+    let tile = it.iconTile ?? 0;
+    if (it.block !== undefined) {
+      const bt = this.reg.getBlock(it.block);
+      tile = bt.textures.side;
+    }
+    const geo = new THREE.BoxGeometry(0.25, 0.25, 0.25);
+    const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture });
+    // set UVs for all 6 faces to the item tile
+    const [u0, v0, u1, v1] = this.atlas.uv(tile);
+    const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
+    for (let i = 0; i < 6; i++) {
+      const o = i * 4 * 2;
+      uvAttr.setXY(o / 2, u0, v0); uvAttr.setXY(o / 2 + 1, u1, v0); uvAttr.setXY(o / 2 + 2, u1, v1); uvAttr.setXY(o / 2 + 3, u0, v1);
+    }
+    uvAttr.needsUpdate = true;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    this.scene.add(mesh);
+    this.drops.push({
+      mesh,
+      vel: new THREE.Vector3((Math.random() - 0.5) * 2, 3 + Math.random() * 2, (Math.random() - 0.5) * 2),
+      item, count, life: 120, pickupDelay: 0.5,
+    });
+  }
+
+  private updateDrops(dt: number) {
+    for (let i = this.drops.length - 1; i >= 0; i--) {
+      const d = this.drops[i];
+      d.life -= dt;
+      if (d.life <= 0) {
+        this.scene.remove(d.mesh);
+        d.mesh.geometry.dispose();
+        (d.mesh.material as THREE.Material).dispose();
+        this.drops.splice(i, 1);
+        continue;
+      }
+      // physics
+      d.vel.y -= 20 * dt;
+      // try move
+      const np = d.mesh.position.clone();
+      np.x += d.vel.x * dt;
+      np.y += d.vel.y * dt;
+      np.z += d.vel.z * dt;
+      // ground collision
+      const bx = Math.floor(np.x), by = Math.floor(np.y), bz = Math.floor(np.z);
+      if (this.reg.getBlock(this.world.getBlock(bx, by, bz)).solid) {
+        // don't move into solid; stop
+        d.vel.set(0, 0, 0);
+      } else {
+        d.mesh.position.copy(np);
+      }
+      // friction
+      d.vel.x *= 0.92;
+      d.vel.z *= 0.92;
+      // spin
+      d.mesh.rotation.y += dt * 2;
+      d.mesh.position.y += Math.sin(performance.now() * 0.003 + i) * 0.002;
+      // pickup
+      if (d.pickupDelay > 0) {
+        d.pickupDelay -= dt;
+      } else {
+        const dx = d.mesh.position.x - this.player.pos.x;
+        const dy = d.mesh.position.y - (this.player.pos.y + 0.9);
+        const dz = d.mesh.position.z - this.player.pos.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist < 1.5) {
+          // attract toward player
+          if (dist > 0.5) {
+            d.mesh.position.x -= dx * dt * 4;
+            d.mesh.position.y -= dy * dt * 4;
+            d.mesh.position.z -= dz * dt * 4;
+          } else {
+            // pick up
+            const leftover = this.inv.add({ item: d.item, count: d.count });
+            if (leftover.count <= 0) {
+              this.scene.remove(d.mesh);
+              d.mesh.geometry.dispose();
+              (d.mesh.material as THREE.Material).dispose();
+              this.drops.splice(i, 1);
+              this.playSound('pickup', 'item');
+            } else {
+              d.count = leftover.count;
+            }
+          }
+        }
+      }
+    }
   }
 
   private useToolDurability(slot: number) {
@@ -761,6 +871,23 @@ export class VoxelEngine {
     const py = this.target.y + this.target.ny;
     const pz = this.target.z + this.target.nz;
     if (py < 0 || py >= 256) return;
+    const bt = this.reg.getBlock(blockId);
+    // placement validation: check what we're placing ON (the target block)
+    const targetBlock = this.world.getBlock(this.target.x, this.target.y, this.target.z);
+    const targetBt = this.reg.getBlock(targetBlock);
+    // non-solid blocks (torches, flowers, plants, etc.) require a solid neighbor to attach to
+    if (!bt.solid) {
+      // for cross-render blocks (torch, flower, plant), need a solid block adjacent
+      let hasSolidSupport = false;
+      // check the face we're placing against (the target block itself)
+      if (targetBt.solid) hasSolidSupport = true;
+      // also check if there's a solid block below (for ground placement)
+      if (!hasSolidSupport) {
+        const below = this.world.getBlock(px, py - 1, pz);
+        if (this.reg.getBlock(below).solid) hasSolidSupport = true;
+      }
+      if (!hasSolidSupport) return; // can't place without support
+    }
     // don't place into player
     const pminX = Math.floor(this.player.pos.x - this.player.halfW);
     const pmaxX = Math.floor(this.player.pos.x + this.player.halfW);
@@ -768,11 +895,12 @@ export class VoxelEngine {
     const pmaxY = Math.floor(this.player.pos.y + this.player.height);
     const pminZ = Math.floor(this.player.pos.z - this.player.halfW);
     const pmaxZ = Math.floor(this.player.pos.z + this.player.halfW);
-    const bt = this.reg.getBlock(blockId);
     if (bt.solid) {
       if (px >= pminX && px <= pmaxX && py >= pminY && py <= pmaxY && pz >= pminZ && pz <= pmaxZ) return;
     }
-    if (this.world.getBlock(px, py, pz) !== B.AIR) return;
+    // can't place on top of non-air (unless it's replaceable like water — but we disallow for now)
+    const existing = this.world.getBlock(px, py, pz);
+    if (existing !== B.AIR && !this.reg.getBlock(existing).liquid) return;
     this.world.setBlock(px, py, pz, blockId);
     if (this.gameMode !== 'creative') this.inv.consumeOne(this.selected);
     this.placeFlash = { x: px, y: py, z: pz, t: 0.25 };
@@ -819,6 +947,8 @@ export class VoxelEngine {
     this.mobs = [];
     for (const p of this.projectiles) p.dispose(this.scene);
     this.projectiles = [];
+    for (const d of this.drops) { this.scene.remove(d.mesh); d.mesh.geometry.dispose(); (d.mesh.material as THREE.Material).dispose(); }
+    this.drops = [];
   }
 
   private spawnLight(wx: number, wy: number, wz: number, timeFactor: number): number {
@@ -1039,6 +1169,9 @@ export class VoxelEngine {
     // particles
     this.updateParticles(dt);
 
+    // dropped items
+    this.updateDrops(dt);
+
     // view model (hand + held item)
     this.updateViewModel(dt);
 
@@ -1138,6 +1271,7 @@ export class VoxelEngine {
       else if (kind === 'place') { freq = 300; dur = 0.08; type = 'sine'; }
       else if (kind === 'eat') { freq = 180; dur = 0.18; type = 'sine'; }
       else if (kind === 'hit') { freq = 400; dur = 0.1; type = 'sawtooth'; }
+      else if (kind === 'pickup') { freq = 800; dur = 0.08; type = 'sine'; }
       o.type = type;
       o.frequency.setValueAtTime(freq, now);
       o.frequency.exponentialRampToValueAtTime(freq * 0.6, now + dur);
@@ -1291,42 +1425,41 @@ export class VoxelEngine {
         // torch / flower / plant: flat billboard with alphaTest
         const tile = bt.textures.side;
         const [u0, v0, u1, v1] = this.atlas.uv(tile);
-        const geo = new THREE.PlaneGeometry(0.3, 0.3);
+        const geo = new THREE.PlaneGeometry(0.18, 0.18);
         const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
         uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
         uvAttr.needsUpdate = true;
         const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
         if (bt.light > 0) mat.emissive = new THREE.Color(0xffaa33);
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(0.18, -0.05, -0.5);
-        mesh.rotation.set(0.0, -0.3, 0.0);
+        mesh.position.set(0.22, -0.18, -0.6);
+        mesh.rotation.set(0.0, -0.2, 0.0);
         this.itemMesh = mesh;
         this.handGroup.add(mesh);
         return;
       }
-      // 3D cube for block items — Minecraft: block is ~0.375 blocks in hand
+      // 3D cube for block items — Minecraft: ~0.35 blocks, positioned in hand
       const geo = buildItemCubeGeometry(this.reg, item.block);
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, side: THREE.FrontSide });
       if (bt.light > 0) mat.emissive = new THREE.Color(bt.light > 10 ? 0x332200 : 0x111100);
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.18, -0.05, -0.55);
-      mesh.rotation.set(0.1, -0.8, 0.0);
-      mesh.scale.setScalar(0.4);
+      mesh.position.set(0.22, -0.15, -0.65);
+      mesh.rotation.set(0.15, -0.7, 0.05);
+      mesh.scale.setScalar(0.3);
       this.itemMesh = mesh;
       this.handGroup.add(mesh);
     } else {
-      // tools: flat plane, ~0.6 blocks tall, held at proper angle
+      // tools: flat plane, ~0.4 blocks, held at proper angle
       const tile = item.iconTile ?? 0;
       const [u0, v0, u1, v1] = this.atlas.uv(tile);
-      const geo = new THREE.PlaneGeometry(0.6, 0.6);
+      const geo = new THREE.PlaneGeometry(0.4, 0.4);
       const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
       uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
       uvAttr.needsUpdate = true;
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.15, -0.15, -0.55);
-      // Minecraft tool hold angle: rotated so handle is in hand, head points forward
-      mesh.rotation.set(0.0, -0.5, 0.15);
+      mesh.position.set(0.2, -0.22, -0.6);
+      mesh.rotation.set(0.0, -0.4, 0.1);
       mesh.rotation.order = 'YXZ';
       this.itemMesh = mesh;
       this.handGroup.add(mesh);

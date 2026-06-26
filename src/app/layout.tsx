@@ -14,24 +14,24 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Z.ai Code Scaffold - AI-Powered Development",
-  description: "Modern Next.js scaffold optimized for AI-powered development with Z.ai. Built with TypeScript, Tailwind CSS, and shadcn/ui.",
-  keywords: ["Z.ai", "Next.js", "TypeScript", "Tailwind CSS", "shadcn/ui", "AI development", "React"],
-  authors: [{ name: "Z.ai Team" }],
+  title: "Ghardan - Voxel Sandbox",
+  description: "A browser-based voxel sandbox game inspired by Minecraft. Build, mine, craft, and survive.",
+  keywords: ["Ghardan", "voxel", "sandbox", "Minecraft", "browser game", "Three.js"],
+  authors: [{ name: "Ghardan" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
+    title: "Ghardan",
+    description: "A browser-based voxel sandbox game",
     url: "https://chat.z.ai",
-    siteName: "Z.ai",
+    siteName: "Ghardan",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
+    title: "Ghardan",
+    description: "A browser-based voxel sandbox game",
   },
 };
 

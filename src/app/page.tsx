@@ -168,7 +168,7 @@ function StartScreen({ hasAutosave, onNew, onContinue, onImport }: { hasAutosave
   const [showModes, setShowModes] = useState(false);
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(5,8,20,0.9)', color: '#fff', gap: 16 }}>
-      <div style={{ fontSize: 56, letterSpacing: 6, textShadow: '4px 4px 0 #000', margin: 0, color: '#e8e8e8', fontWeight: 800, fontFamily: 'monospace' }}>VOXELCRAFT</div>
+      <div style={{ fontSize: 56, letterSpacing: 6, textShadow: '4px 4px 0 #000', margin: 0, color: '#e8e8e8', fontWeight: 800, fontFamily: 'monospace' }}>GHARDAN</div>
       <p style={{ margin: 0, opacity: 0.7, fontSize: 13 }}>A browser-based voxel sandbox</p>
       {!showModes ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
@@ -268,6 +268,8 @@ function InventoryOverlay({ snap, engine, clickSlot, mouse }: {
             {snap.creativeItems.map((ci, i) => (
               <div
                 key={i}
+                draggable
+                onDragStart={(e) => { e.dataTransfer.setData('text/plain', String(ci.item)); e.dataTransfer.effectAllowed = 'copy'; }}
                 onMouseEnter={() => setTooltip(ci.name)}
                 onMouseLeave={() => setTooltip(null)}
                 onMouseDown={(e) => { e.preventDefault(); if (e.button === 0) { engine.giveCreativeItem(ci.item); setTooltip('Added: ' + ci.name); } }}
@@ -275,19 +277,40 @@ function InventoryOverlay({ snap, engine, clickSlot, mouse }: {
                 style={{
                   width: 44, height: 44, background: 'rgba(120,120,120,0.4)', border: '2px solid #2a2a2a',
                   boxShadow: 'inset -2px -2px 0 #0006, inset 2px 2px 0 #fff3',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxSizing: 'border-box',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', boxSizing: 'border-box',
                 }}
               >
                 <ItemIcon engine={engine} item={{ item: ci.item, count: 1 }} size={32} />
               </div>
             ))}
           </div>
-          {/* Player hotbar */}
+          {/* Player hotbar (drop targets) */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2, marginTop: 8 }}>
-            {snap.inventory.slice(0, 9).map((it, i) => slotWithTooltip(i, it, 44, i === snap.selected))}
+            {snap.inventory.slice(0, 9).map((it, i) => (
+              <div
+                key={i}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const itemId = parseInt(e.dataTransfer.getData('text/plain'));
+                  if (!isNaN(itemId)) {
+                    // place item directly in this hotbar slot
+                    const item = engine.reg.getItem(itemId);
+                    if (item) {
+                      engine.inv.slots[i] = { item: itemId, count: item.maxStack };
+                      engine.markDirty();
+                    }
+                  }
+                }}
+                onMouseEnter={() => { if (it) setTooltip(engine.itemName(it.item)); }}
+                onMouseLeave={() => setTooltip(null)}
+              >
+                <Slot engine={engine} item={it} id={i} selected={i === snap.selected} onClick={clickSlot} size={44} />
+              </div>
+            ))}
           </div>
           <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, opacity: 0.6 }}>
-            Click an item to add it to your inventory · Press E or Esc to close
+            Click to add · Drag to place in hotbar · Right-click splits · Press E or Esc to close
           </div>
         </div>
 
