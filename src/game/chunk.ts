@@ -78,7 +78,8 @@ const QUAD_UV = [
 
 export interface ChunkMeshes {
   opaque: THREE.Mesh | null;
-  transparent: THREE.Mesh | null;
+  cutout: THREE.Mesh | null;
+  liquid: THREE.Mesh | null;
 }
 
 // Build geometry for a chunk. Needs neighbor chunk data for border face culling.
@@ -86,18 +87,26 @@ export function buildChunkMesh(
   chunk: ChunkData,
   neighbors: (ChunkData | null)[], // [ +x, -x, +z, -z ]
   registry: Registry
-): { opaque: THREE.BufferGeometry | null; transparent: THREE.BufferGeometry | null } {
+): { opaque: THREE.BufferGeometry | null; cutout: THREE.BufferGeometry | null; liquid: THREE.BufferGeometry | null } {
   const opaquePos: number[] = [];
   const opaqueNor: number[] = [];
   const opaqueUv: number[] = [];
   const opaqueCol: number[] = [];
   const opaqueIdx: number[] = [];
 
-  const tPos: number[] = [];
-  const tNor: number[] = [];
-  const tUv: number[] = [];
-  const tCol: number[] = [];
-  const tIdx: number[] = [];
+  // cutout: torch, plants, glass, ice (transparent but not liquid — use alphaTest)
+  const cPos: number[] = [];
+  const cNor: number[] = [];
+  const cUv: number[] = [];
+  const cCol: number[] = [];
+  const cIdx: number[] = [];
+
+  // liquid: water, lava (use opacity)
+  const lPos: number[] = [];
+  const lNor: number[] = [];
+  const lUv: number[] = [];
+  const lCol: number[] = [];
+  const lIdx: number[] = [];
 
   const ox = chunk.cx * CHUNK_SIZE;
   const oz = chunk.cz * CHUNK_SIZE;
@@ -109,7 +118,6 @@ export function buildChunkMesh(
     if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
       return chunk.blocks[idx(lx, y, lz)];
     }
-    // neighbor
     if (lx < 0) {
       const n = neighbors[1];
       if (!n) return B.AIR;
@@ -141,8 +149,12 @@ export function buildChunkMesh(
         const bt = registry.getBlock(b);
         if (bt.render === 'none') continue;
 
+        // determine target geometry: liquid -> liquid, cross -> cutout, transparent solid -> cutout, opaque -> opaque
+        const isLiquid = bt.liquid;
+        const isCutout = bt.render === 'cross' || (!bt.liquid && bt.transparent);
+
         if (bt.render === 'cross') {
-          // two diagonal quads
+          // two diagonal quads — always render (no culling)
           const tile = bt.textures.side;
           const [u0, v0, u1, v1] = registry.atlas.uv(tile);
           const shade = 1.0;
@@ -150,21 +162,19 @@ export function buildChunkMesh(
           const g = (bt.color ? bt.color[1] : 1) * shade;
           const bl = (bt.color ? bt.color[2] : 1) * shade;
           const x0 = ox + lx, z0 = oz + lz;
-          // quad A: (0,0)-(1,1) diagonal
           const quads = [
             [[x0 + 0.0, y, z0 + 0.0], [x0 + 1.0, y, z0 + 1.0], [x0 + 1.0, y + 1, z0 + 1.0], [x0 + 0.0, y + 1, z0 + 0.0]],
             [[x0 + 0.0, y, z0 + 1.0], [x0 + 1.0, y, z0 + 0.0], [x0 + 1.0, y + 1, z0 + 0.0], [x0 + 0.0, y + 1, z0 + 1.0]],
           ];
           for (const q of quads) {
-            const base = tPos.length / 3;
+            const base = cPos.length / 3;
             for (let i = 0; i < 4; i++) {
-              tPos.push(q[i][0], q[i][1], q[i][2]);
-              tNor.push(0, 1, 0);
-              tCol.push(r, g, bl);
+              cPos.push(q[i][0], q[i][1], q[i][2]);
+              cNor.push(0, 1, 0);
+              cCol.push(r, g, bl);
             }
-            // uv
-            tUv.push(u0, v0, u1, v0, u1, v1, u0, v1);
-            tIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+            cUv.push(u0, v0, u1, v0, u1, v1, u0, v1);
+            cIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
           }
           continue;
         }
@@ -177,18 +187,14 @@ export function buildChunkMesh(
           const nz = lz + face.dir[2];
           const neighbor = getBlock(nx, ny, nz);
           const nbt = registry.getBlock(neighbor);
-          // cull rule: render face if neighbor is air OR (neighbor transparent AND not same as current for liquids) 
           let renderFace = false;
           if (neighbor === B.AIR) renderFace = true;
           else if (nbt.transparent) {
             if (bt.liquid) {
-              // water: render face if neighbor is not water and not opaque
               if (!nbt.liquid && !nbt.opaque) renderFace = true;
             } else if (bt.opaque) {
-              // opaque block next to transparent (glass/water/leaves): render face
               renderFace = true;
             } else {
-              // transparent solid (glass/leaves/ice) next to transparent: render only if different type
               if (neighbor !== b) renderFace = true;
             }
           }
@@ -200,14 +206,14 @@ export function buildChunkMesh(
           let g = face.shade;
           let bl = face.shade;
           if (bt.color) { r *= bt.color[0]; g *= bt.color[1]; bl *= bt.color[2]; }
-          // simple AO: darken if block has solid neighbors on the sides of this face
-          // (cheap approximation)
-          const base = bt.liquid ? tPos.length / 3 : opaquePos.length / 3;
-          const P = bt.liquid ? tPos : opaquePos;
-          const N = bt.liquid ? tNor : opaqueNor;
-          const U = bt.liquid ? tUv : opaqueUv;
-          const C = bt.liquid ? tCol : opaqueCol;
-          const Idx = bt.liquid ? tIdx : opaqueIdx;
+
+          // pick target arrays
+          let P: number[], N: number[], U: number[], C: number[], Idx: number[];
+          if (isLiquid) { P = lPos; N = lNor; U = lUv; C = lCol; Idx = lIdx; }
+          else if (isCutout) { P = cPos; N = cNor; U = cUv; C = cCol; Idx = cIdx; }
+          else { P = opaquePos; N = opaqueNor; U = opaqueUv; C = opaqueCol; Idx = opaqueIdx; }
+
+          const base = P.length / 3;
           for (let i = 0; i < 4; i++) {
             const c = face.corners[i];
             P.push(ox + lx + c[0], y + c[1], oz + lz + c[2]);
@@ -233,6 +239,7 @@ export function buildChunkMesh(
   };
   return {
     opaque: makeGeom(opaquePos, opaqueNor, opaqueUv, opaqueCol, opaqueIdx),
-    transparent: makeGeom(tPos, tNor, tUv, tCol, tIdx),
+    cutout: makeGeom(cPos, cNor, cUv, cCol, cIdx),
+    liquid: makeGeom(lPos, lNor, lUv, lCol, lIdx),
   };
 }

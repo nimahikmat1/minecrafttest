@@ -37,6 +37,7 @@ export interface EngineSnapshot {
   message: string | null;
   eyeInWater: boolean;
   air: number; // 0-10 air bubbles
+  dead: boolean;
 }
 
 export class VoxelEngine {
@@ -321,9 +322,14 @@ export class VoxelEngine {
     this.player.pitch = Math.max(-lim, Math.min(lim, this.player.pitch));
   };
   private mouseDown = { left: false, right: false };
+  private attackCooldown = 0;
   private onMouseDown = (e: MouseEvent) => {
     if (!this.pointerLocked) return;
-    if (e.button === 0) { this.mouseDown.left = true; this.startMining(); }
+    if (e.button === 0) {
+      this.mouseDown.left = true;
+      // try to attack a mob first; if no mob hit, start mining
+      if (!this.attackMob()) this.startMining();
+    }
     if (e.button === 2) { this.mouseDown.right = true; this.useItem(); }
   };
   private onMouseUp = (e: MouseEvent) => {
@@ -525,6 +531,74 @@ export class VoxelEngine {
     // recompute crafting if a craft-grid slot changed
     if (id >= 100 && id < 100 + this.craftGrid.length) this.recomputeCraft();
     this.markDirty();
+  }
+
+  // ----------------- combat -----------------
+  private attackMob(): boolean {
+    if (this.attackCooldown > 0) return false;
+    const eye = new THREE.Vector3();
+    this.player.getEyePosition(eye);
+    const dir = new THREE.Vector3();
+    this.player.getLookDir(dir);
+
+    // compute attack damage from held item
+    const stack = this.inv.hotbar(this.selected);
+    const item = stack ? this.reg.getItem(stack.item) : null;
+    let dmg = 1; // bare hand
+    if (item?.attackDamage) dmg = item.attackDamage;
+
+    const reach = 4.0;
+    let bestMob: Mob | null = null;
+    let bestT = reach;
+
+    for (const m of this.mobs) {
+      if (!m.alive) continue;
+      // mob AABB
+      const hw = m.def.width / 2;
+      const minX = m.pos.x - hw, maxX = m.pos.x + hw;
+      const minY = m.pos.y, maxY = m.pos.y + m.def.height;
+      const minZ = m.pos.z - hw, maxZ = m.pos.z + hw;
+      // ray-AABB intersection (slab method)
+      const inv = { x: 1 / dir.x, y: 1 / dir.y, z: 1 / dir.z };
+      const t1 = (minX - eye.x) * inv.x;
+      const t2 = (maxX - eye.x) * inv.x;
+      const t3 = (minY - eye.y) * inv.y;
+      const t4 = (maxY - eye.y) * inv.y;
+      const t5 = (minZ - eye.z) * inv.z;
+      const t6 = (maxZ - eye.z) * inv.z;
+      const tmin = Math.max(Math.min(t1, t2), Math.min(t3, t4), Math.min(t5, t6));
+      const tmax = Math.min(Math.max(t1, t2), Math.max(t3, t4), Math.max(t5, t6));
+      if (tmax >= 0 && tmin <= tmax && tmin >= 0 && tmin < bestT) {
+        bestT = tmin;
+        bestMob = m;
+      } else if (tmax >= 0 && tmin <= 0 && tmax < bestT) {
+        // origin inside AABB (shouldn't happen but handle)
+        bestT = 0;
+        bestMob = m;
+      }
+    }
+
+    if (bestMob) {
+      const died = bestMob.damage(dmg);
+      this.attackCooldown = 0.4;
+      this.swingT = this.swingDuration;
+      // knockback
+      const kb = dir.clone();
+      kb.y = 0.3;
+      bestMob.vel.add(kb.multiplyScalar(6));
+      bestMob.hurtTimer = 0.4;
+      this.playSound('hit', 'combat');
+      if (died) {
+        // drop items
+        for (const drop of bestMob.def.drops) {
+          const count = drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
+          if (count > 0) this.inv.add({ item: drop.item, count });
+        }
+      }
+      this.markDirty();
+      return true;
+    }
+    return false;
   }
 
   // ----------------- mining / placement -----------------
@@ -873,6 +947,9 @@ export class VoxelEngine {
   }
 
   private update(dt: number) {
+    // cooldowns
+    if (this.attackCooldown > 0) this.attackCooldown -= dt;
+
     // world time
     if (!this.inventoryOpen) this.time += dt;
 
@@ -908,7 +985,8 @@ export class VoxelEngine {
 
     // mobs
     this.updateMobSpawning(dt);
-    for (const m of this.mobs) m.update(dt, this.world, this.player, this.projectiles);
+    const sunY = Math.sin(this.timeOfDay() * Math.PI * 2);
+    for (const m of this.mobs) m.update(dt, this.world, this.player, this.projectiles, sunY);
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const alive = this.projectiles[i].update(dt, this.world, this.player);
       if (!alive) { this.projectiles[i].dispose(this.scene); this.projectiles.splice(i, 1); }
@@ -990,6 +1068,7 @@ export class VoxelEngine {
       message: this.message,
       eyeInWater: this.player.eyeInLiquid(this.world),
       air: Math.max(0, Math.ceil(10 - (this.player.airTimer / 12) * 10)),
+      dead: this.player.dead,
     };
     this.onState(s);
   }
@@ -1009,6 +1088,7 @@ export class VoxelEngine {
       if (kind === 'break') { freq = mat === 'stone' ? 140 : mat === 'wood' ? 220 : 320; dur = 0.14; type = 'square'; }
       else if (kind === 'place') { freq = 300; dur = 0.08; type = 'sine'; }
       else if (kind === 'eat') { freq = 180; dur = 0.18; type = 'sine'; }
+      else if (kind === 'hit') { freq = 400; dur = 0.1; type = 'sawtooth'; }
       o.type = type;
       o.frequency.setValueAtTime(freq, now);
       o.frequency.exponentialRampToValueAtTime(freq * 0.6, now + dur);
@@ -1025,7 +1105,8 @@ export class VoxelEngine {
   respawn() {
     this.player.health = this.player.maxHealth;
     this.player.hunger = this.player.maxHunger;
-    this.player.spawn(this.world, 0, 0);
+    this.player.dead = false;
+    this.spawnOnLand();
     this.player.vel.set(0, 0, 0);
     this.markDirty();
   }
@@ -1071,27 +1152,49 @@ export class VoxelEngine {
     if (!item) return;
 
     if (item.block !== undefined) {
-      // 3D cube for block items
+      const bt = this.reg.getBlock(item.block);
+      if (bt.render === 'cross') {
+        // torch / flower / plant: flat billboard plane with alphaTest
+        const tile = bt.textures.side;
+        const [u0, v0, u1, v1] = this.atlas.uv(tile);
+        const geo = new THREE.PlaneGeometry(0.22, 0.22);
+        const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
+        // fix UV: plane default UVs are (0,1)(1,1)(0,0)(1,0) — map to atlas
+        uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
+        uvAttr.needsUpdate = true;
+        const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
+        if (bt.light > 0) mat.emissive = new THREE.Color(0xffaa33);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(0.0, -0.04, -0.38);
+        mesh.rotation.set(0.1, -0.3, 0.0);
+        this.itemMesh = mesh;
+        this.handGroup.add(mesh);
+        return;
+      }
+      // 3D cube for block items (Minecraft scale: ~0.4 blocks)
       const geo = buildItemCubeGeometry(this.reg, item.block);
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, side: THREE.FrontSide });
+      if (bt.light > 0) mat.emissive = new THREE.Color(bt.light > 10 ? 0x332200 : 0x111100);
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.0, -0.02, -0.32);
-      mesh.rotation.set(0.15, -0.5, 0.1);
-      mesh.scale.setScalar(0.32);
+      mesh.position.set(0.0, 0.0, -0.38);
+      mesh.rotation.set(0.2, -0.6, 0.05);
+      mesh.scale.setScalar(0.38);
       this.itemMesh = mesh;
       this.handGroup.add(mesh);
     } else {
-      // flat plane for tools/items
+      // flat plane for tools/items (Minecraft: tools are ~0.5 blocks tall in view)
       const tile = item.iconTile ?? 0;
       const [u0, v0, u1, v1] = this.atlas.uv(tile);
-      const geo = new THREE.PlaneGeometry(0.3, 0.3);
+      const geo = new THREE.PlaneGeometry(0.45, 0.45);
       const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
-      uvAttr.setXY(0, u0, v0); uvAttr.setXY(1, u1, v0); uvAttr.setXY(2, u0, v1); uvAttr.setXY(3, u1, v1);
+      uvAttr.setXY(0, u0, v1); uvAttr.setXY(1, u1, v1); uvAttr.setXY(2, u0, v0); uvAttr.setXY(3, u1, v0);
       uvAttr.needsUpdate = true;
       const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0.0, -0.06, -0.38);
-      mesh.rotation.set(0.25, -0.35, 0.05);
+      mesh.position.set(0.05, -0.08, -0.45);
+      // rotate to look like it's being held (pointing forward and down)
+      mesh.rotation.set(0.0, -0.4, 0.1);
+      mesh.rotation.order = 'YXZ';
       this.itemMesh = mesh;
       this.handGroup.add(mesh);
     }

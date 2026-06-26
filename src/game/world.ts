@@ -12,11 +12,12 @@ export class World {
   gen: WorldGen;
   seed: number;
   chunks = new Map<string, ChunkData>();
-  meshes = new Map<string, { opaque: THREE.Mesh | null; transparent: THREE.Mesh | null }>();
+  meshes = new Map<string, { opaque: THREE.Mesh | null; cutout: THREE.Mesh | null; liquid: THREE.Mesh | null }>();
   modsByChunk = new Map<string, ModEntry[]>();
   group: THREE.Group;
   opaqueMat: THREE.Material;
-  transparentMat: THREE.Material;
+  cutoutMat: THREE.Material;
+  liquidMat: THREE.Material;
 
   constructor(seed: number, reg: Registry) {
     this.seed = seed;
@@ -27,11 +28,18 @@ export class World {
       vertexColors: true,
       map: reg.atlas.texture,
     });
-    this.transparentMat = new THREE.MeshLambertMaterial({
+    this.cutoutMat = new THREE.MeshLambertMaterial({
       vertexColors: true,
       map: reg.atlas.texture,
       transparent: true,
-      opacity: 0.85,
+      alphaTest: 0.5,
+      side: THREE.DoubleSide,
+    });
+    this.liquidMat = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      map: reg.atlas.texture,
+      transparent: true,
+      opacity: 0.75,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
@@ -123,7 +131,7 @@ export class World {
     const key = chunkKey(cx, cz);
     let m = this.meshes.get(key);
     if (!m) {
-      m = { opaque: null, transparent: null };
+      m = { opaque: null, cutout: null, liquid: null };
       this.meshes.set(key, m);
     }
     // replace opaque
@@ -138,16 +146,28 @@ export class World {
       m.opaque = mesh;
       this.group.add(mesh);
     }
-    // replace transparent
-    if (m.transparent) {
-      this.group.remove(m.transparent);
-      m.transparent.geometry.dispose();
-      m.transparent = null;
+    // replace cutout (torch, plants, glass)
+    if (m.cutout) {
+      this.group.remove(m.cutout);
+      m.cutout.geometry.dispose();
+      m.cutout = null;
     }
-    if (geom.transparent) {
-      const mesh = new THREE.Mesh(geom.transparent, this.transparentMat);
+    if (geom.cutout) {
+      const mesh = new THREE.Mesh(geom.cutout, this.cutoutMat);
       mesh.frustumCulled = true;
-      m.transparent = mesh;
+      m.cutout = mesh;
+      this.group.add(mesh);
+    }
+    // replace liquid (water, lava)
+    if (m.liquid) {
+      this.group.remove(m.liquid);
+      m.liquid.geometry.dispose();
+      m.liquid = null;
+    }
+    if (geom.liquid) {
+      const mesh = new THREE.Mesh(geom.liquid, this.liquidMat);
+      mesh.frustumCulled = true;
+      m.liquid = mesh;
       this.group.add(mesh);
     }
     ch.dirty = false;
@@ -191,7 +211,8 @@ export class World {
       const m = this.meshes.get(key);
       if (m) {
         if (m.opaque) { this.group.remove(m.opaque); m.opaque.geometry.dispose(); }
-        if (m.transparent) { this.group.remove(m.transparent); m.transparent.geometry.dispose(); }
+        if (m.cutout) { this.group.remove(m.cutout); m.cutout.geometry.dispose(); }
+        if (m.liquid) { this.group.remove(m.liquid); m.liquid.geometry.dispose(); }
         this.meshes.delete(key);
       }
     }

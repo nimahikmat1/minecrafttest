@@ -181,7 +181,7 @@ export class TextureAtlas {
       px(c, s, 8, 8, 1, 8, '#cfcabe');
     });
     this.reg('glass', (c, s) => {
-      px(c, s, 0, 0, s, s, 'rgba(180,220,235,0.25)');
+      px(c, s, 0, 0, s, s, 'rgba(180,220,235,0.6)');
       px(c, s, 0, 0, s, 1, '#cfeaf2');
       px(c, s, 0, 0, 1, s, '#cfeaf2');
       px(c, s, s - 1, 0, 1, s, '#cfeaf2');

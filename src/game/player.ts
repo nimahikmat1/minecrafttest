@@ -28,6 +28,7 @@ export class Player {
   maxHunger = 20;
   hungerTimer = 0;
   regenTimer = 0;
+  starveTimer = 0;
   airTimer = 0;
   fallStart = 0;
   flying = false;
@@ -40,6 +41,7 @@ export class Player {
   hurtFlash = 0;
   invuln = 0;
   sprinting = false;
+  dead = false;
 
   constructor(reg: Registry) {
     this.reg = reg;
@@ -127,13 +129,18 @@ export class Player {
   }
 
   damage(amt: number) {
-    if (this.invuln > 0) return;
+    if (this.invuln > 0 || this.dead) return;
     this.health = Math.max(0, this.health - amt);
     this.hurtFlash = 0.6;
     this.invuln = 0.5;
+    if (this.health <= 0) {
+      this.dead = true;
+      this.vel.set(0, 0, 0);
+    }
   }
 
   heal(amt: number) {
+    if (this.dead) return;
     this.health = Math.min(this.maxHealth, this.health + amt);
   }
   feed(amt: number) {
@@ -143,6 +150,12 @@ export class Player {
   update(dt: number, input: InputState, world: World) {
     if (this.invuln > 0) this.invuln -= dt;
     if (this.hurtFlash > 0) this.hurtFlash -= dt;
+    if (this.dead) {
+      // dead: just apply gravity, no input
+      this.vel.y -= GRAVITY * dt;
+      this.moveAxis(world, 'y', this.vel.y * dt);
+      return;
+    }
 
     const inWater = this.feetInLiquid(world);
     const eyeWater = this.eyeInLiquid(world);
@@ -238,15 +251,19 @@ export class Player {
       this.hunger = Math.max(0, this.hunger - 0.2);
       this.hungerTimer = 0;
     }
+    // starvation (separate timer from regen)
     if (this.hunger <= 0) {
+      this.starveTimer += dt;
+      if (this.starveTimer > 4) { this.damage(1); this.starveTimer = 0; }
+    } else {
+      this.starveTimer = 0;
+    }
+    // health regen (only when well-fed, uses its own timer)
+    if (this.hunger >= 18 && this.health < this.maxHealth) {
       this.regenTimer += dt;
-      if (this.regenTimer > 4) { this.damage(1); this.regenTimer = 0; }
+      if (this.regenTimer > 3) { this.heal(1); this.regenTimer = 0; this.hunger = Math.max(0, this.hunger - 1); }
     } else {
       this.regenTimer = 0;
-      if (this.hunger >= 18 && this.health < this.maxHealth) {
-        this.regenTimer += dt;
-        if (this.regenTimer > 3) { this.heal(1); this.regenTimer = 0; this.hunger = Math.max(0, this.hunger - 1); }
-      }
     }
 
     // head bob
@@ -278,5 +295,11 @@ export class Player {
     this.pos.set(x + 0.5, y, z + 0.5);
     this.vel.set(0, 0, 0);
     this.fallStart = y;
+    this.dead = false;
+    this.health = this.maxHealth;
+    this.hunger = this.maxHunger;
+    this.invuln = 0;
+    this.hurtFlash = 0;
+    this.airTimer = 0;
   }
 }

@@ -112,6 +112,8 @@ export class Mob {
   attackCooldown = 0;
   hurtTimer = 0;
   fleeTimer = 0;
+  burnTimer = 0;
+  lavaTimer = 0;
   alive = true;
   id: string;
   reg: Registry;
@@ -167,7 +169,7 @@ export class Mob {
     if (!this.alive) return false;
     this.health -= amt;
     this.hurtTimer = 0.4;
-    if (this.def.hostile === false) this.fleeTimer = 4;
+    if (this.def.hostile === false) this.fleeTimer = 5;
     if (this.health <= 0) {
       this.alive = false;
       return true; // died
@@ -175,10 +177,53 @@ export class Mob {
     return false;
   }
 
-  update(dt: number, world: World, player: Player, projectiles: Projectile[]) {
+  private isInWater(world: World): boolean {
+    const b = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.1), Math.floor(this.pos.z));
+    return this.reg.getBlock(b).liquid;
+  }
+
+  private isInLava(world: World): boolean {
+    const b = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.1), Math.floor(this.pos.z));
+    return b === 36; // B.LAVA
+  }
+
+  private canSeeSky(world: World, x: number, z: number): boolean {
+    const lx = x - Math.floor(x / 16) * 16;
+    const lz = z - Math.floor(z / 16) * 16;
+    void lx; void lz;
+    const wx = Math.floor(x), wz = Math.floor(z);
+    const headY = Math.floor(this.pos.y + this.def.height);
+    for (let y = headY + 1; y < 256; y++) {
+      const b = world.getBlock(wx, y, wz);
+      if (this.reg.getBlock(b).opaque) return false;
+    }
+    return true;
+  }
+
+  update(dt: number, world: World, player: Player, projectiles: Projectile[], sunY: number) {
     if (!this.alive) return;
     if (this.hurtTimer > 0) this.hurtTimer -= dt;
     if (this.attackCooldown > 0) this.attackCooldown -= dt;
+
+    // burning in daylight
+    if (this.def.hostile && sunY > 0.15 && this.canSeeSky(world, this.pos.x, this.pos.z)) {
+      this.burnTimer += dt;
+      this.hurtTimer = Math.max(this.hurtTimer, 0.1); // flash red
+      if (this.burnTimer > 1) {
+        this.damage(1);
+        this.burnTimer = 0;
+      }
+    } else {
+      this.burnTimer = 0;
+    }
+
+    // lava damage
+    if (this.isInLava(world)) {
+      if (this.lavaTimer > 0.5) { this.damage(2); this.lavaTimer = 0; }
+      this.lavaTimer += dt;
+    } else {
+      this.lavaTimer = 0;
+    }
 
     const def = this.def;
     const toPlayer = new THREE.Vector3().subVectors(player.pos, this.pos);
@@ -187,17 +232,18 @@ export class Mob {
     const distXZ = toPlayer.length();
 
     let moveDir = new THREE.Vector3();
-    if (def.hostile) {
+    const inWater = this.isInWater(world);
+
+    if (def.hostile && !player.dead) {
       if (dist < def.detectRange) {
         toPlayer.normalize();
         moveDir.copy(toPlayer);
         this.yaw = Math.atan2(toPlayer.x, toPlayer.z);
-        // attack
-        if (def.kind === 'stalker' && dist < def.attackRange && this.attackCooldown <= 0) {
+        // attack (stalker melee)
+        if (def.kind === 'stalker' && distXZ < def.attackRange && this.attackCooldown <= 0) {
           player.damage(def.attack);
           this.attackCooldown = 1.0;
         } else if (def.kind === 'shooter' && dist < def.attackRange && dist > 3 && this.attackCooldown <= 0) {
-          // shoot projectile toward player
           const from = this.pos.clone(); from.y += def.height * 0.6;
           const target = player.pos.clone(); target.y += 0.9;
           const dir = new THREE.Vector3().subVectors(target, from).normalize();
@@ -218,7 +264,7 @@ export class Mob {
         if (this.wanderTimer <= 0 || !this.wanderTarget) {
           this.wanderTimer = 2 + Math.random() * 3;
           if (Math.random() < 0.4) {
-            this.wanderTarget = null; // idle
+            this.wanderTarget = null;
           } else {
             const ang = Math.random() * Math.PI * 2;
             const r = 3 + Math.random() * 6;
@@ -239,13 +285,47 @@ export class Mob {
       }
     }
 
+    // smart obstacle avoidance: if moving and blocked ahead, jump
+    if (moveDir.lengthSq() > 0.01 && this.onGround) {
+      const ahead = this.pos.clone();
+      ahead.x += moveDir.x * 0.6;
+      ahead.z += moveDir.z * 0.6;
+      const checkY = Math.floor(this.pos.y);
+      const blockAhead = world.getBlock(Math.floor(ahead.x), checkY, Math.floor(ahead.z));
+      const blockAbove = world.getBlock(Math.floor(ahead.x), checkY + 1, Math.floor(ahead.z));
+      if (this.reg.getBlock(blockAhead).solid && !this.reg.getBlock(blockAbove).solid) {
+        this.vel.y = 8.0; // jump over 1-block obstacle
+        this.onGround = false;
+      }
+    }
+
     // apply horizontal velocity
-    const speed = def.speed * (this.fleeTimer > 0 ? 1.4 : 1);
+    const speed = def.speed * (this.fleeTimer > 0 ? 1.4 : 1) * (inWater ? 0.6 : 1);
     this.vel.x = moveDir.x * speed;
     this.vel.z = moveDir.z * speed;
 
-    // gravity
-    this.vel.y -= 28 * dt;
+    // gravity / swimming
+    if (inWater) {
+      this.vel.y -= 8 * dt; // reduced gravity in water
+      this.vel.y *= 0.85; // water drag
+      // swim up if hostile and chasing, or if drowning
+      if (def.hostile || this.pos.y < -10) this.vel.y = Math.max(this.vel.y, 2);
+      this.vel.x *= 0.85;
+      this.vel.z *= 0.85;
+    } else {
+      this.vel.y -= 28 * dt;
+    }
+
+    // player collision: don't walk inside player (keep ~0.8 distance)
+    const dx = this.pos.x - player.pos.x;
+    const dz = this.pos.z - player.pos.z;
+    const playerDist = Math.sqrt(dx * dx + dz * dz);
+    const minDist = (this.def.width + 0.6) / 2;
+    if (playerDist < minDist && playerDist > 0.001) {
+      const push = (minDist - playerDist) / playerDist;
+      this.pos.x += dx * push;
+      this.pos.z += dz * push;
+    }
 
     // integrate with substeps
     this.onGround = false;
@@ -257,16 +337,22 @@ export class Mob {
       this.moveAxis(world, 'z', this.vel.z * sdt);
       this.moveAxis(world, 'y', this.vel.y * sdt);
     }
+    // re-check ground
+    if (!inWater) {
+      const probe = this.pos.clone();
+      probe.y -= 0.05;
+      if (this.collides(world, probe)) this.onGround = true;
+    }
 
     // update mesh
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw;
-    // hurt flash
-    const flash = this.hurtTimer > 0;
+    // hurt/burn flash
+    const flash = this.hurtTimer > 0 || this.burnTimer > 0;
     (this.group as any).traverse((o: THREE.Object3D) => {
       if ((o as any).isMesh) {
         const m = (o as THREE.Mesh).material as THREE.MeshLambertMaterial;
-        if (m && m.emissive) m.emissive.setHex(flash ? 0x661111 : 0x000000);
+        if (m && m.emissive) m.emissive.setHex(flash ? (this.burnTimer > 0 ? 0x661100 : 0x661111) : 0x000000);
       }
     });
   }

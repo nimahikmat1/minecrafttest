@@ -127,6 +127,15 @@ export default function Home() {
         </>
       )}
 
+      {/* Death screen */}
+      {started && snap && snap.dead && eng() && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(80,0,0,0.6)', color: '#fff', gap: 16 }}>
+          <h1 style={{ fontSize: 48, margin: 0, textShadow: '2px 2px 0 #000', color: '#ff5555' }}>You Died!</h1>
+          <MenuButton onClick={() => eng()!.respawn()}>Respawn</MenuButton>
+          <MenuButton onClick={() => { try { setHasAutosave(!!localStorage.getItem('voxel_save_autosave')); } catch {} setStarted(false); }}>Quit to Menu</MenuButton>
+        </div>
+      )}
+
       {/* Inventory / Crafting / Furnace overlay */}
       {started && snap && snap.inventoryOpen && eng() && (
         <InventoryOverlay snap={snap} engine={eng()!} clickSlot={clickSlot} mouse={mouse} dayLen={dayLen} setDayLen={setDayLen} />
