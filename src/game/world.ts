@@ -96,6 +96,12 @@ export class World {
     if (lx === CHUNK_SIZE - 1) this.markDirty(cx + 1, cz);
     if (lz === 0) this.markDirty(cx, cz - 1);
     if (lz === CHUNK_SIZE - 1) this.markDirty(cx, cz + 1);
+    // immediate remesh for instant visual feedback (no see-through lag)
+    this.remeshChunk(cx, cz);
+    if (lx === 0) this.remeshChunk(cx - 1, cz);
+    if (lx === CHUNK_SIZE - 1) this.remeshChunk(cx + 1, cz);
+    if (lz === 0) this.remeshChunk(cx, cz - 1);
+    if (lz === CHUNK_SIZE - 1) this.remeshChunk(cx, cz + 1);
     return true;
   }
 
@@ -104,50 +110,56 @@ export class World {
     if (ch) ch.dirty = true;
   }
 
+  // Rebuild a single chunk's mesh immediately.
+  remeshChunk(cx: number, cz: number) {
+    const ch = this.chunks.get(chunkKey(cx, cz));
+    if (!ch) return;
+    const nx_p = this.ensureChunk(cx + 1, cz);
+    const nx_m = this.ensureChunk(cx - 1, cz);
+    const nz_p = this.ensureChunk(cx, cz + 1);
+    const nz_m = this.ensureChunk(cx, cz - 1);
+    const neighbors = [nx_p, nx_m, nz_p, nz_m];
+    const geom = buildChunkMesh(ch, neighbors, this.reg);
+    const key = chunkKey(cx, cz);
+    let m = this.meshes.get(key);
+    if (!m) {
+      m = { opaque: null, transparent: null };
+      this.meshes.set(key, m);
+    }
+    // replace opaque
+    if (m.opaque) {
+      this.group.remove(m.opaque);
+      m.opaque.geometry.dispose();
+      m.opaque = null;
+    }
+    if (geom.opaque) {
+      const mesh = new THREE.Mesh(geom.opaque, this.opaqueMat);
+      mesh.frustumCulled = true;
+      m.opaque = mesh;
+      this.group.add(mesh);
+    }
+    // replace transparent
+    if (m.transparent) {
+      this.group.remove(m.transparent);
+      m.transparent.geometry.dispose();
+      m.transparent = null;
+    }
+    if (geom.transparent) {
+      const mesh = new THREE.Mesh(geom.transparent, this.transparentMat);
+      mesh.frustumCulled = true;
+      m.transparent = mesh;
+      this.group.add(mesh);
+    }
+    ch.dirty = false;
+  }
+
   // Mesh up to `budget` dirty chunks per call.
   updateMeshes(budget = 3) {
     let built = 0;
     for (const ch of this.chunks.values()) {
       if (built >= budget) break;
       if (!ch.dirty) continue;
-      // ensure neighbor data
-      const nx_p = this.ensureChunk(ch.cx + 1, ch.cz);
-      const nx_m = this.ensureChunk(ch.cx - 1, ch.cz);
-      const nz_p = this.ensureChunk(ch.cx, ch.cz + 1);
-      const nz_m = this.ensureChunk(ch.cx, ch.cz - 1);
-      const neighbors = [nx_p, nx_m, nz_p, nz_m];
-      const geom = buildChunkMesh(ch, neighbors, this.reg);
-      const key = chunkKey(ch.cx, ch.cz);
-      let m = this.meshes.get(key);
-      if (!m) {
-        m = { opaque: null, transparent: null };
-        this.meshes.set(key, m);
-      }
-      // replace opaque
-      if (m.opaque) {
-        this.group.remove(m.opaque);
-        m.opaque.geometry.dispose();
-        m.opaque = null;
-      }
-      if (geom.opaque) {
-        const mesh = new THREE.Mesh(geom.opaque, this.opaqueMat);
-        mesh.frustumCulled = true;
-        m.opaque = mesh;
-        this.group.add(mesh);
-      }
-      // replace transparent
-      if (m.transparent) {
-        this.group.remove(m.transparent);
-        m.transparent.geometry.dispose();
-        m.transparent = null;
-      }
-      if (geom.transparent) {
-        const mesh = new THREE.Mesh(geom.transparent, this.transparentMat);
-        mesh.frustumCulled = true;
-        m.transparent = mesh;
-        this.group.add(mesh);
-      }
-      ch.dirty = false;
+      this.remeshChunk(ch.cx, ch.cz);
       built++;
     }
   }

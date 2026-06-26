@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { VoxelEngine, EngineSnapshot } from '@/game/engine';
 import { ItemStack } from '@/game/types';
-import { Heart, Food, ItemIcon, Slot } from '@/components/game/Icons';
+import { Heart, Food, Bubble, ItemIcon, Slot } from '@/components/game/Icons';
 
 export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -63,12 +63,6 @@ export default function Home() {
     return out;
   };
 
-  const timeLabel = (t: number) => {
-    const hours = Math.floor(t * 24);
-    const mins = Math.floor((t * 24 * 60) % 60);
-    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-  };
-
   return (
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', background: '#000', fontFamily: 'monospace' }}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
@@ -81,47 +75,54 @@ export default function Home() {
         <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', boxShadow: 'inset 0 0 80px rgba(180,0,0,0.25)' }} />
       )}
 
+      {/* Underwater blue overlay */}
+      {started && snap && snap.eyeInWater && !snap.paused && (
+        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', background: 'rgba(40,90,180,0.35)' }} />
+      )}
+
       {/* HUD */}
       {started && snap && !snap.paused && !snap.inventoryOpen && (
         <>
-          {/* crosshair */}
+          {/* crosshair — simple white + with blend mode (Minecraft style) */}
           <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)', pointerEvents: 'none' }}>
-            <div style={{ position: 'relative', width: snap.targetBlock ? 22 : 18, height: snap.targetBlock ? 22 : 18 }}>
-              <div style={{ position: 'absolute', left: '50%', top: 0, width: 2, height: '100%', background: snap.targetBlock ? '#fff' : 'rgba(255,255,255,0.8)', transform: 'translateX(-50%)', mixBlendMode: 'difference' }} />
-              <div style={{ position: 'absolute', top: '50%', left: 0, height: 2, width: '100%', background: snap.targetBlock ? '#fff' : 'rgba(255,255,255,0.8)', transform: 'translateY(-50%)', mixBlendMode: 'difference' }} />
+            <div style={{ position: 'relative', width: 20, height: 20, mixBlendMode: 'difference' }}>
+              <div style={{ position: 'absolute', left: '50%', top: 1, width: 2, height: 18, background: '#fff', transform: 'translateX(-50%)' }} />
+              <div style={{ position: 'absolute', top: '50%', left: 1, height: 2, width: 18, background: '#fff', transform: 'translateY(-50%)' }} />
             </div>
           </div>
 
-          {/* top-left info */}
-          <div style={{ position: 'absolute', left: 8, top: 8, color: '#fff', textShadow: '1px 1px 0 #000', fontSize: 13, lineHeight: 1.5, pointerEvents: 'none' }}>
-            <div>FPS: {snap.fps}</div>
-            <div>Biome: {snap.biome}</div>
-            <div>Time: {timeLabel(snap.timeOfDay)} {snap.timeOfDay > 0.5 ? '🌙' : '☀'}</div>
-            <div>Mobs: {snap.mobCount}</div>
-            {snap.targetBlock && <div style={{ color: '#ffd24a' }}>► {snap.targetBlock}</div>}
-            {snap.message && <div style={{ color: '#9ff7c0' }}>{snap.message}</div>}
-          </div>
+          {/* transient message toast (above hotbar) */}
+          {snap.message && (
+            <div style={{ position: 'absolute', left: '50%', bottom: 90, transform: 'translateX(-50%)', color: '#fff', textShadow: '1px 1px 0 #000', fontSize: 13, pointerEvents: 'none', opacity: Math.min(1, snap.message ? 1 : 0) }}>
+              {snap.message}
+            </div>
+          )}
 
-          {/* hotbar + stats */}
-          <div style={{ position: 'absolute', left: '50%', bottom: 8, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, pointerEvents: 'none' }}>
-            <div style={{ display: 'flex', gap: 2 }}>
-              {hearts(snap.health).map((h, i) => <Heart key={i} full={h} />)}
+          {/* hotbar + stats (bottom center, Minecraft layout) */}
+          <div style={{ position: 'absolute', left: '50%', bottom: 8, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, pointerEvents: 'none' }}>
+            {/* air bubbles (shown when underwater) */}
+            {snap.eyeInWater && (
+              <div style={{ display: 'flex', gap: 1 }}>
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <Bubble key={i} full={i < snap.air} />
+                ))}
+              </div>
+            )}
+            {/* health + hunger row */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: 9 * 46 + 8 * 2, padding: '0 2px' }}>
+              <div style={{ display: 'flex', gap: 1 }}>
+                {hearts(snap.health).map((h, i) => <Heart key={i} full={h} />)}
+              </div>
+              <div style={{ display: 'flex', gap: 1 }}>
+                {hearts(snap.hunger).map((h, i) => <Food key={10 - 1 - i} full={h} />)}
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: 2 }}>
-              {hearts(snap.hunger).map((h, i) => <Food key={i} full={h} />)}
-            </div>
-            <div style={{ display: 'flex', gap: 2, padding: 4, background: 'rgba(0,0,0,0.45)', border: '2px solid #2a2a2a' }}>
+            {/* hotbar */}
+            <div style={{ display: 'flex', gap: 2, padding: 3, background: 'rgba(0,0,0,0.5)', border: '2px solid #1a1a1a', boxShadow: 'inset 2px 2px 0 #0008, inset -2px -2px 0 #fff2' }}>
               {snap.hotbar.map((it, i) => (
                 <Slot key={i} engine={eng()!} item={it} id={i} selected={i === snap.selected} onClick={clickSlot} size={46} />
               ))}
             </div>
-          </div>
-
-          {/* controls hint */}
-          <div style={{ position: 'absolute', right: 8, bottom: 8, color: '#fff', textShadow: '1px 1px 0 #000', fontSize: 11, textAlign: 'right', pointerEvents: 'none', opacity: 0.7 }}>
-            <div>WASD move · Space jump · Shift sprint</div>
-            <div>L-click break · R-click place · Wheel/1-9 select</div>
-            <div>E inventory · Esc pause · F fly</div>
           </div>
         </>
       )}
@@ -183,7 +184,10 @@ function PauseOverlay({ engine, snap, dayLen, setDayLen, fileRef, onImport, onQu
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)' }}>
       <div style={{ background: 'rgba(20,20,28,0.95)', border: '2px solid #000', padding: 24, color: '#fff', minWidth: 320, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <h2 style={{ margin: '0 0 8px 0', textAlign: 'center' }}>Paused</h2>
+        <h2 style={{ margin: '0 0 4px 0', textAlign: 'center' }}>Paused</h2>
+        <div style={{ fontSize: 11, opacity: 0.6, textAlign: 'center', marginBottom: 4 }}>
+          FPS: {snap.fps} · Biome: {snap.biome} · Mobs: {snap.mobCount} · Seed: {engine.seed}
+        </div>
         <MenuButton onClick={() => engine.togglePause()}>Resume</MenuButton>
         <MenuButton onClick={() => { engine.respawn(); }}>Respawn</MenuButton>
         <MenuButton onClick={() => { engine.toggleFly(); }}>{snap.fly ? 'Fly: OFF' : 'Fly: ON'}</MenuButton>

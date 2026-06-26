@@ -25,6 +25,16 @@ export function Food({ full }: { full: 'full' | 'half' | 'empty' }) {
   );
 }
 
+export function Bubble({ full }: { full: boolean }) {
+  const fill = full ? '#cfeaf2' : '#2a4a5a';
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" style={{ imageRendering: 'pixelated', display: 'block' }}>
+      <path d="M5 3h6v1H5zM3 4h2v2H3zM11 4h2v2h-2zM3 9h2v2H3zM11 9h2v2h-2zM5 11h6v1H5zM5 4h6v7H5z" fill={fill} />
+      <path d="M5 4h2v2H5z" fill={full ? '#ffffff' : '#3a5a6a'} />
+    </svg>
+  );
+}
+
 export function ItemIcon({ engine, item, size = 36 }: { engine: VoxelEngine; item: ItemStack | null; size?: number }) {
   if (!item) return null;
   const url = engine.iconDataURL(item.item);

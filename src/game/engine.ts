@@ -35,6 +35,8 @@ export interface EngineSnapshot {
   loadedChunks: number;
   mobCount: number;
   message: string | null;
+  eyeInWater: boolean;
+  air: number; // 0-10 air bubbles
 }
 
 export class VoxelEngine {
@@ -81,6 +83,18 @@ export class VoxelEngine {
   selectionMesh!: THREE.LineSegments;
   breakMesh!: THREE.Mesh;
   placeFlash: { x: number; y: number; z: number; t: number } | null = null;
+
+  // first-person view model (hand + held item)
+  viewModelScene!: THREE.Scene;
+  viewModelCamera!: THREE.PerspectiveCamera;
+  handGroup!: THREE.Group;
+  armMesh!: THREE.Mesh;
+  itemMesh: THREE.Mesh | null = null;
+  lastSelectedItem: number = -2;
+  swingT = 0;
+  swingDuration = 0.28;
+  viewBobX = 0;
+  viewBobY = 0;
 
   lastTime = 0;
   fps = 60;
@@ -138,6 +152,26 @@ export class VoxelEngine {
     this.breakMesh = new THREE.Mesh(new THREE.BoxGeometry(1.01, 1.01, 1.01), breakMat);
     this.breakMesh.visible = false;
     this.scene.add(this.breakMesh);
+
+    // first-person view model scene (rendered on top of world)
+    this.viewModelScene = new THREE.Scene();
+    this.viewModelCamera = new THREE.PerspectiveCamera(70, container.clientWidth / container.clientHeight, 0.01, 10);
+    this.viewModelCamera.position.set(0, 0, 0);
+    const vmAmbient = new THREE.AmbientLight(0xffffff, 0.7);
+    const vmDir = new THREE.DirectionalLight(0xffffff, 0.6);
+    vmDir.position.set(0.5, 1, 0.8);
+    this.viewModelScene.add(vmAmbient);
+    this.viewModelScene.add(vmDir);
+    this.handGroup = new THREE.Group();
+    this.viewModelScene.add(this.handGroup);
+    // arm (hand) — skin-toned box
+    const armGeo = new THREE.BoxGeometry(0.16, 0.16, 0.45);
+    const armMat = new THREE.MeshLambertMaterial({ color: 0xe8b890 });
+    this.armMesh = new THREE.Mesh(armGeo, armMat);
+    this.armMesh.position.set(0.02, -0.16, -0.18);
+    this.armMesh.rotation.x = -Math.PI / 6;
+    this.handGroup.add(this.armMesh);
+    this.handGroup.position.set(0.32, -0.30, -0.55);
 
     // starter items
     this.giveStarterItems();
@@ -343,6 +377,8 @@ export class VoxelEngine {
     this.renderer.setSize(c.clientWidth, c.clientHeight);
     this.camera.aspect = c.clientWidth / c.clientHeight;
     this.camera.updateProjectionMatrix();
+    this.viewModelCamera.aspect = c.clientWidth / c.clientHeight;
+    this.viewModelCamera.updateProjectionMatrix();
   };
 
   // ----------------- inventory / crafting UI -----------------
@@ -495,6 +531,7 @@ export class VoxelEngine {
   private startMining() {
     if (!this.target) { this.mining = null; return; }
     this.mining = { x: this.target.x, y: this.target.y, z: this.target.z, progress: 0 };
+    this.swingT = this.swingDuration;
   }
 
   private miningSpeed(blockId: number): number {
@@ -579,6 +616,7 @@ export class VoxelEngine {
     if (!stack) return;
     const item = this.reg.getItem(stack.item);
     if (!item) return;
+    this.swingT = this.swingDuration; // swing hand on use
     // food
     if (item.category === 'food' && this.player.health < this.player.maxHealth || (item.food && this.player.hunger < this.player.maxHunger)) {
       if (item.food) {
@@ -855,6 +893,13 @@ export class VoxelEngine {
     this.player.getLookDir(dir);
     this.camera.lookAt(eye.clone().add(dir));
 
+    // smooth sprint FOV change
+    const targetFov = this.player.sprinting ? 82 : 75;
+    if (Math.abs(this.camera.fov - targetFov) > 0.1) {
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, 8 * dt);
+      this.camera.updateProjectionMatrix();
+    }
+
     // raycast target
     this.updateTarget(eye, dir);
 
@@ -874,6 +919,9 @@ export class VoxelEngine {
 
     // particles
     this.updateParticles(dt);
+
+    // view model (hand + held item)
+    this.updateViewModel(dt);
 
     // day/night
     this.updateDayNight();
@@ -899,7 +947,12 @@ export class VoxelEngine {
   }
 
   private render() {
+    this.renderer.autoClear = false;
+    this.renderer.clear(); // color + depth
     this.renderer.render(this.scene, this.camera);
+    // view model on top (always visible, not occluded by world)
+    this.renderer.clearDepth();
+    this.renderer.render(this.viewModelScene, this.viewModelCamera);
   }
 
   private stateTimer = 0;
@@ -935,6 +988,8 @@ export class VoxelEngine {
       loadedChunks: this.world.meshes.size,
       mobCount: this.mobs.length,
       message: this.message,
+      eyeInWater: this.player.eyeInLiquid(this.world),
+      air: Math.max(0, Math.ceil(10 - (this.player.airTimer / 12) * 10)),
     };
     this.onState(s);
   }
@@ -1002,6 +1057,87 @@ export class VoxelEngine {
     return this.reg.getItem(itemId)?.displayName ?? '?';
   }
 
+  // ----------------- view model (first-person hand + held item) -----------------
+  private rebuildItemMesh() {
+    if (this.itemMesh) {
+      this.handGroup.remove(this.itemMesh);
+      this.itemMesh.geometry.dispose();
+      (this.itemMesh.material as THREE.Material).dispose();
+      this.itemMesh = null;
+    }
+    const stack = this.inv.hotbar(this.selected);
+    if (!stack) return;
+    const item = this.reg.getItem(stack.item);
+    if (!item) return;
+
+    if (item.block !== undefined) {
+      // 3D cube for block items
+      const geo = buildItemCubeGeometry(this.reg, item.block);
+      const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, side: THREE.FrontSide });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0.0, -0.02, -0.32);
+      mesh.rotation.set(0.15, -0.5, 0.1);
+      mesh.scale.setScalar(0.32);
+      this.itemMesh = mesh;
+      this.handGroup.add(mesh);
+    } else {
+      // flat plane for tools/items
+      const tile = item.iconTile ?? 0;
+      const [u0, v0, u1, v1] = this.atlas.uv(tile);
+      const geo = new THREE.PlaneGeometry(0.3, 0.3);
+      const uvAttr = geo.attributes.uv as THREE.BufferAttribute;
+      uvAttr.setXY(0, u0, v0); uvAttr.setXY(1, u1, v0); uvAttr.setXY(2, u0, v1); uvAttr.setXY(3, u1, v1);
+      uvAttr.needsUpdate = true;
+      const mat = new THREE.MeshLambertMaterial({ map: this.atlas.texture, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0.0, -0.06, -0.38);
+      mesh.rotation.set(0.25, -0.35, 0.05);
+      this.itemMesh = mesh;
+      this.handGroup.add(mesh);
+    }
+  }
+
+  private updateViewModel(dt: number) {
+    // rebuild item mesh if selected slot changed
+    const curItem = this.inv.hotbar(this.selected)?.item ?? -1;
+    if (curItem !== this.lastSelectedItem) {
+      this.rebuildItemMesh();
+      this.lastSelectedItem = curItem;
+    }
+
+    // swing timer
+    if (this.swingT > 0) {
+      this.swingT -= dt;
+      if (this.swingT < 0) this.swingT = 0;
+    }
+    // continuous swing while mining
+    if (this.mouseDown.left && this.swingT <= 0) {
+      this.swingT = this.swingDuration;
+    }
+
+    // swing animation: sin curve 0 -> 1 -> 0
+    const swingProgress = this.swingT > 0 ? 1 - (this.swingT / this.swingDuration) : 0;
+    const swingAngle = Math.sin(swingProgress * Math.PI) * 0.9;
+
+    // walk bob
+    const bob = this.player.bobAmt;
+    const bobX = Math.cos(this.player.bobPhase) * 0.025 * bob;
+    const bobY = Math.sin(this.player.bobPhase * 2) * 0.018 * bob;
+
+    // smooth view bob interpolation
+    this.viewBobX += (bobX - this.viewBobX) * Math.min(1, 10 * dt);
+    this.viewBobY += (bobY - this.viewBobY) * Math.min(1, 10 * dt);
+
+    // idle sway
+    const t = performance.now() * 0.001;
+    const idleX = Math.sin(t * 1.3) * 0.006;
+    const idleY = Math.sin(t * 1.7) * 0.004;
+
+    this.handGroup.position.set(0.32 + this.viewBobX + idleX, -0.30 + this.viewBobY + idleY, -0.55);
+    this.handGroup.rotation.x = -swingAngle;
+    this.handGroup.rotation.z = Math.sin(t * 0.9) * 0.015;
+  }
+
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
@@ -1021,4 +1157,44 @@ export class VoxelEngine {
 
 function biomeToName(b: Biome): string {
   return BiomeName[b].toLowerCase();
+}
+
+// Build a unit cube geometry with per-face atlas UVs for the held-item view model.
+function buildItemCubeGeometry(reg: Registry, blockId: number): THREE.BufferGeometry {
+  const bt = reg.getBlock(blockId);
+  // faces: +x, -x, +y(top), -y(bottom), +z, -z ; each with 4 corners (CCW from outside)
+  const faces = [
+    { tex: bt.textures.side, corners: [[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]] },
+    { tex: bt.textures.side, corners: [[-1, -1, 1], [-1, 1, 1], [-1, 1, -1], [-1, -1, -1]] },
+    { tex: bt.textures.top, corners: [[-1, 1, 1], [1, 1, 1], [1, 1, -1], [-1, 1, -1]] },
+    { tex: bt.textures.bottom, corners: [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]] },
+    { tex: bt.textures.side, corners: [[1, -1, 1], [1, 1, 1], [-1, 1, 1], [-1, -1, 1]] },
+    { tex: bt.textures.side, corners: [[-1, -1, -1], [-1, 1, -1], [1, 1, -1], [1, -1, -1]] },
+  ];
+  const pos: number[] = [], uv: number[] = [], nor: number[] = [], idx: number[] = [];
+  let v = 0;
+  for (const f of faces) {
+    const [u0, v0, u1, v1] = reg.atlas.uv(f.tex);
+    const faceUV = [[u0, v0], [u0, v1], [u1, v1], [u1, v0]];
+    // compute normal from first 3 corners
+    const a = f.corners[0], b = f.corners[1], c = f.corners[2];
+    const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const nx = e1[1] * e2[2] - e1[2] * e2[1];
+    const ny = e1[2] * e2[0] - e1[0] * e2[2];
+    const nz = e1[0] * e2[1] - e1[1] * e2[0];
+    for (let i = 0; i < 4; i++) {
+      pos.push(f.corners[i][0] * 0.5, f.corners[i][1] * 0.5, f.corners[i][2] * 0.5);
+      nor.push(nx, ny, nz);
+      uv.push(faceUV[i][0], faceUV[i][1]);
+    }
+    idx.push(v, v + 1, v + 2, v, v + 2, v + 3);
+    v += 4;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
 }

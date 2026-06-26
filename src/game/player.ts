@@ -187,6 +187,10 @@ export class Player {
       this.vel.z *= 0.9;
     } else {
       this.vel.y -= GRAVITY * dt;
+      if (input.jump && this.onGround) {
+        this.vel.y = JUMP_VEL;
+        this.onGround = false;
+      }
     }
 
     // track fall start
