@@ -1007,9 +1007,12 @@ export class VoxelEngine {
             const k = choices[Math.floor(Math.random() * choices.length)];
             if (MOB_DEFS[k].spawnBiomes.includes(biomeToName(biome))) kind = k;
           } else if (light > 8) {
-            // passive
-            const choices: MobKind[] = ['grazer', 'critter'];
-            const k = choices[Math.floor(Math.random() * choices.length)];
+            // passive (including villagers)
+            const r = Math.random();
+            let k: MobKind;
+            if (r < 0.5) k = 'grazer';
+            else if (r < 0.8) k = 'critter';
+            else k = 'villager';
             if (MOB_DEFS[k].spawnBiomes.includes(biomeToName(biome))) kind = k;
           }
           if (kind) {
