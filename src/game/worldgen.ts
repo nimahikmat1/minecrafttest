@@ -189,9 +189,97 @@ export class WorldGen {
       }
     }
 
+    // 3. Village generation (rare, on plains only)
+    const villageR = n.hash2(chunk.cx * 7 + 999, chunk.cz * 7 + 888);
+    if (villageR < 0.025) {
+      const cx2 = ox + 8, cz2 = oz + 8;
+      const centerCol = this.column(cx2, cz2);
+      if (centerCol.biome === Biome.PLAINS || centerCol.biome === Biome.FOREST) {
+        this.generateVillage(chunk, cx2, centerCol.height, cz2);
+      }
+    }
+
     chunk.computeHeightMap();
     chunk.generated = true;
     chunk.dirty = true;
+  }
+
+  private generateVillage(chunk: ChunkData, cx: number, cy: number, cz: number) {
+    const n = this.noise;
+    const numHouses = 3 + Math.floor(n.hash2(cx, cz) * 3);
+    for (let i = 0; i < numHouses; i++) {
+      const ang = (i / numHouses) * Math.PI * 2;
+      const dist = 8 + n.hash2(cx + i, cz + i) * 8;
+      const hx = Math.floor(cx + Math.cos(ang) * dist);
+      const hz = Math.floor(cz + Math.sin(ang) * dist);
+      const hy = this.column(hx, hz).height;
+      if (hy > 35 && hy < 80) {
+        this.placeHouse(chunk, hx, hy, hz);
+      }
+    }
+    // village paths (cobblestone)
+    for (let i = 0; i < numHouses; i++) {
+      const ang = (i / numHouses) * Math.PI * 2;
+      const dist = 8 + n.hash2(cx + i, cz + i) * 8;
+      const hx = Math.floor(cx + Math.cos(ang) * dist);
+      const hz = Math.floor(cz + Math.sin(ang) * dist);
+      // path from center to house
+      const steps = Math.floor(dist);
+      for (let s = 0; s < steps; s++) {
+        const px = Math.floor(cx + (hx - cx) * (s / steps));
+        const pz = Math.floor(cz + (hz - cz) * (s / steps));
+        const py = this.column(px, pz).height;
+        if (py > 35) this.setBlockForce(chunk, px, py, pz, B.COBBLESTONE);
+      }
+    }
+  }
+
+  private placeHouse(chunk: ChunkData, x: number, y: number, z: number) {
+    // Minecraft-style house: 5x5, 3 tall, oak planks, peaked roof
+    const w = 5, d = 5, h = 3;
+    // foundation
+    for (let dx = 0; dx < w; dx++)
+      for (let dz = 0; dz < d; dz++)
+        this.setBlockForce(chunk, x + dx, y, z + dz, B.OAK_PLANKS);
+    // walls
+    for (let dy = 1; dy <= h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        this.setBlockForce(chunk, x + dx, y + dy, z, B.OAK_PLANKS);
+        this.setBlockForce(chunk, x + dx, y + dy, z + d - 1, B.OAK_PLANKS);
+      }
+      for (let dz = 0; dz < d; dz++) {
+        this.setBlockForce(chunk, x, y + dy, z + dz, B.OAK_PLANKS);
+        this.setBlockForce(chunk, x + w - 1, y + dy, z + dz, B.OAK_PLANKS);
+      }
+    }
+    // log corners
+    for (let dy = 1; dy <= h; dy++) {
+      this.setBlockForce(chunk, x, y + dy, z, B.OAK_LOG);
+      this.setBlockForce(chunk, x + w - 1, y + dy, z, B.OAK_LOG);
+      this.setBlockForce(chunk, x, y + dy, z + d - 1, B.OAK_LOG);
+      this.setBlockForce(chunk, x + w - 1, y + dy, z + d - 1, B.OAK_LOG);
+    }
+    // door
+    this.setBlockForce(chunk, x + 2, y + 1, z, B.OAK_DOOR);
+    this.setBlockForce(chunk, x + 2, y + 2, z, B.AIR);
+    // windows
+    this.setBlockForce(chunk, x + 1, y + 2, z, B.GLASS);
+    this.setBlockForce(chunk, x + 3, y + 2, z, B.GLASS);
+    this.setBlockForce(chunk, x, y + 2, z + 2, B.GLASS);
+    this.setBlockForce(chunk, x + w - 1, y + 2, z + 2, B.GLASS);
+    // peaked roof (oak stairs would be ideal, using planks for simplicity)
+    for (let dx = -1; dx <= w; dx++)
+      for (let dz = -1; dz <= d; dz++)
+        this.setBlockForce(chunk, x + dx, y + h + 1, z + dz, B.OAK_PLANKS);
+    // roof peak
+    for (let dx = 0; dx < w; dx++)
+      for (let dz = 0; dz < d; dz++)
+        this.setBlockForce(chunk, x + dx, y + h + 2, z + dz, B.OAK_PLANKS);
+    // torch inside
+    this.setBlockForce(chunk, x + 2, y + 2, z + 2, B.TORCH);
+    // bed inside
+    this.setBlockForce(chunk, x + 1, y + 1, z + 3, B.WOOL_RED);
+    this.setBlockForce(chunk, x + 2, y + 1, z + 3, B.WOOL_RED);
   }
 
   oreAt(x: number, y: number, z: number, h: number): number {

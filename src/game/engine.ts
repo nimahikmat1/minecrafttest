@@ -40,7 +40,7 @@ export interface EngineSnapshot {
   dead: boolean;
   gameMode: 'survival' | 'creative';
   hotbarName: string | null;
-  creativeItems: { item: number; name: string }[];
+  creativeItems: { item: number; name: string; category: string }[];
   creativePage: number;
 }
 
@@ -66,7 +66,7 @@ export class VoxelEngine {
   seed = 0;
   time = 0; // seconds since start of day cycle (wraps dayLength)
   dayLength = 600; // 10 minutes default
-  renderDistance = 5; // reduced for performance
+  renderDistance = 6; // balanced for performance and coverage
   gameMode: 'survival' | 'creative' = 'survival';
   creativePage = 0;
   hotbarNameTimer = 0;
@@ -1126,9 +1126,10 @@ export class VoxelEngine {
     // world time
     if (!this.inventoryOpen) this.time += dt;
 
-    // chunk streaming
+    // chunk streaming — generate chunks in a wider radius than render distance
+    // to ensure collision data is always available before player moves there
     this.world.update(this.player.pos.x, this.player.pos.z, this.renderDistance);
-    this.world.updateMeshes(3);
+    this.world.updateMeshes(6);
 
     // player
     if (!this.inventoryOpen) {
@@ -1356,27 +1357,26 @@ export class VoxelEngine {
     this.markDirty();
   }
 
-  getCreativeItems(): { item: number; name: string }[] {
-    const items: { item: number; name: string }[] = [];
-    const perPage = 45;
-    let idx = 0;
-    const skip = this.creativePage * perPage;
-    // add all block items
+  getCreativeItems(): { item: number; name: string; category: string }[] {
+    const items: { item: number; name: string; category: string }[] = [];
+    // add all block items with their categories
     for (const [blockId, bt] of this.reg.blocks) {
       if (blockId === 0) continue; // skip air
-      if (idx >= skip && idx < skip + perPage) {
-        items.push({ item: blockId, name: bt.displayName });
-      }
-      idx++;
+      items.push({ item: blockId, name: bt.displayName, category: bt.category });
     }
-    // add all non-block items
+    // add all non-block items with their categories
     for (const [itemId, it] of this.reg.items) {
       if (it.block !== undefined) continue; // skip block items (already added)
-      if (idx >= skip && idx < skip + perPage) {
-        items.push({ item: itemId, name: it.displayName });
-      }
-      idx++;
+      items.push({ item: itemId, name: it.displayName, category: it.category });
     }
+    // sort by category then name (Minecraft-style)
+    const catOrder = ['building', 'decor', 'terrain', 'wood', 'ore', 'plant', 'light', 'functional', 'block', 'tool', 'armor', 'food', 'material'];
+    items.sort((a, b) => {
+      const ca = catOrder.indexOf(a.category);
+      const cb = catOrder.indexOf(b.category);
+      if (ca !== cb) return (ca === -1 ? 99 : ca) - (cb === -1 ? 99 : cb);
+      return a.name.localeCompare(b.name);
+    });
     return items;
   }
 

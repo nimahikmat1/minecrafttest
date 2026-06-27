@@ -263,26 +263,55 @@ function InventoryOverlay({ snap, engine, clickSlot, mouse }: {
       >
         <div style={{ background: 'rgba(30,30,38,0.96)', border: '2px solid #000', padding: 16, color: '#fff', boxShadow: 'inset 2px 2px 0 #fff3, inset -2px -2px 0 #0006', maxWidth: '90vw' }}>
           <div style={{ textAlign: 'center', fontWeight: 700, marginBottom: 10, letterSpacing: 2, fontSize: 16 }}>CREATIVE INVENTORY</div>
-          {/* Creative item grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2, maxHeight: '320px', overflowY: 'auto', padding: 4, background: 'rgba(0,0,0,0.3)' }}>
-            {snap.creativeItems.map((ci, i) => (
-              <div
-                key={i}
-                draggable
-                onDragStart={(e) => { e.dataTransfer.setData('text/plain', String(ci.item)); e.dataTransfer.effectAllowed = 'copy'; }}
-                onMouseEnter={() => setTooltip(ci.name)}
-                onMouseLeave={() => setTooltip(null)}
-                onMouseDown={(e) => { e.preventDefault(); if (e.button === 0) { engine.giveCreativeItem(ci.item); setTooltip('Added: ' + ci.name); } }}
-                onContextMenu={(e) => e.preventDefault()}
-                style={{
-                  width: 44, height: 44, background: 'rgba(120,120,120,0.4)', border: '2px solid #2a2a2a',
-                  boxShadow: 'inset -2px -2px 0 #0006, inset 2px 2px 0 #fff3',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', boxSizing: 'border-box',
-                }}
-              >
-                <ItemIcon engine={engine} item={{ item: ci.item, count: 1 }} size={32} />
-              </div>
-            ))}
+          {/* Creative item grid with category headers */}
+          <div style={{ maxHeight: '380px', overflowY: 'auto', padding: 4, background: 'rgba(0,0,0,0.3)' }}>
+            {(() => {
+              const items = snap.creativeItems;
+              const categories: { name: string; label: string }[] = [
+                { name: 'building', label: 'Building Blocks' },
+                { name: 'decor', label: 'Decoration Blocks' },
+                { name: 'terrain', label: 'Natural Blocks' },
+                { name: 'wood', label: 'Wood' },
+                { name: 'ore', label: 'Ores' },
+                { name: 'plant', label: 'Plants' },
+                { name: 'light', label: 'Light Sources' },
+                { name: 'functional', label: 'Functional Blocks' },
+                { name: 'tool', label: 'Tools & Combat' },
+                { name: 'armor', label: 'Armor' },
+                { name: 'food', label: 'Food' },
+                { name: 'material', label: 'Materials' },
+                { name: 'block', label: 'Other Blocks' },
+              ];
+              return categories.map(cat => {
+                const catItems = items.filter(ci => ci.category === cat.name);
+                if (catItems.length === 0) return null;
+                return (
+                  <div key={cat.name} style={{ marginBottom: 8 }}>
+                    <div style={{ color: '#ffd24a', fontSize: 11, fontWeight: 700, textShadow: '1px 1px 0 #000', margin: '4px 0', paddingLeft: 4 }}>{cat.label.toUpperCase()}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2 }}>
+                      {catItems.map((ci, i) => (
+                        <div
+                          key={i}
+                          draggable
+                          onDragStart={(e) => { e.dataTransfer.setData('text/plain', String(ci.item)); e.dataTransfer.effectAllowed = 'copy'; }}
+                          onMouseEnter={() => setTooltip(ci.name)}
+                          onMouseLeave={() => setTooltip(null)}
+                          onMouseDown={(e) => { e.preventDefault(); if (e.button === 0) { engine.giveCreativeItem(ci.item); setTooltip('Added: ' + ci.name); } }}
+                          onContextMenu={(e) => e.preventDefault()}
+                          style={{
+                            width: 44, height: 44, background: 'rgba(120,120,120,0.4)', border: '2px solid #2a2a2a',
+                            boxShadow: 'inset -2px -2px 0 #0006, inset 2px 2px 0 #fff3',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'grab', boxSizing: 'border-box',
+                          }}
+                        >
+                          <ItemIcon engine={engine} item={{ item: ci.item, count: 1 }} size={32} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
           {/* Player hotbar (drop targets) */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 44px)', gap: 2, marginTop: 8 }}>
