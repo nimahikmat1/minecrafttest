@@ -385,7 +385,8 @@ export class VoxelEngine {
       return;
     }
     if (code === 'Escape') {
-      if (this.inventoryOpen) { this.closeInventory(); }
+      if (this.furnaceOpen) { this.closeFurnace(); }
+      else if (this.inventoryOpen) { this.closeInventory(); }
       else { this.togglePause(); }
       return;
     }
@@ -447,6 +448,10 @@ export class VoxelEngine {
     this.markDirty();
   }
   closeInventory() {
+    // if a furnace is open, route through closeFurnace so its items aren't lost
+    // and furnaceOpen doesn't stay stuck true (which would leak furnace slots
+    // into whatever UI opens next).
+    if (this.furnaceOpen) { this.closeFurnace(); return; }
     // return held + crafting grid items to inventory
     if (this.held) { this.inv.add(this.held); this.held = null; }
     for (let i = 0; i < this.craftGrid.length; i++) {
@@ -1521,6 +1526,7 @@ export class VoxelEngine {
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
+    this.renderer.domElement.removeEventListener('click', this.onCanvasClick);
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     document.removeEventListener('mousemove', this.onMouseMove);

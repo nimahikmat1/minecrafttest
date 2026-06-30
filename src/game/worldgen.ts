@@ -2,6 +2,7 @@ import { Noise } from './noise';
 import { ChunkData, CHUNK_SIZE, CHUNK_HEIGHT, SEA_LEVEL, idx } from './chunk';
 import { B } from './blocks';
 import { Registry } from './blocks';
+import { BlockId } from './types';
 
 export enum Biome {
   OCEAN = 0,
@@ -71,7 +72,7 @@ export class WorldGen {
       biome = Biome.PLAINS;
     }
 
-    let surface = B.GRASS;
+    let surface: BlockId = B.GRASS;
     if (biome === Biome.OCEAN) surface = B.SAND;
     else if (biome === Biome.DESERT) surface = B.SAND;
     else if (biome === Biome.TUNDRA) surface = B.SNOW;

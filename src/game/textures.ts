@@ -36,18 +36,40 @@ function shade(hex: string, amt: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-// noisy fill: base color with random darker/lighter pixels
+// noisy fill: base color with random darker/lighter pixels, clustered into soft
+// blotches (rather than flat per-pixel static) for a more natural look, plus a
+// subtle edge vignette that fakes a touch of ambient occlusion on every tile.
 function noisy(ctx: CanvasRenderingContext2D, s: number, base: string, seed: number, variance = 0.12, density = 0.5) {
   const r = rnd(seed);
   px(ctx, s, 0, 0, s, s, base);
+
+  // low-res blotch field, upsampled, gives soft clumps of light/dark instead
+  // of uniform static noise — reads much closer to natural stone/dirt/grain.
+  const bw = Math.max(2, Math.ceil(s / 4));
+  const blotch: number[] = [];
+  for (let i = 0; i < bw * bw; i++) blotch.push((r() * 2 - 1));
+
   for (let y = 0; y < s; y++) {
     for (let x = 0; x < s; x++) {
+      const bx = Math.min(bw - 1, Math.floor((x / s) * bw));
+      const by = Math.min(bw - 1, Math.floor((y / s) * bw));
+      const clump = blotch[by * bw + bx];
       if (r() < density) {
-        const amt = (r() * 2 - 1) * variance;
+        const fine = (r() * 2 - 1);
+        // blend a broad clump tone with fine per-pixel grain
+        const amt = (clump * 0.6 + fine * 0.4) * variance;
         px(ctx, s, x, y, 1, 1, shade(base, amt));
       }
     }
   }
+
+  // subtle vignette: darken the outermost ring of pixels slightly so tiles
+  // read with a touch of depth instead of looking perfectly flat.
+  const edgeAmt = -0.06;
+  px(ctx, s, 0, 0, s, 1, shade(base, edgeAmt));
+  px(ctx, s, 0, s - 1, s, 1, shade(base, edgeAmt));
+  px(ctx, s, 0, 0, 1, s, shade(base, edgeAmt));
+  px(ctx, s, s - 1, 0, 1, s, shade(base, edgeAmt));
 }
 
 export class TextureAtlas {
@@ -191,7 +213,7 @@ export class TextureAtlas {
     });
 
     // ---- Ores (stone base + colored specks) ----
-    const ore = (seed: number, color: string) => (c: number, s: number) => {
+    const ore = (seed: number, color: string) => (c: CanvasRenderingContext2D, s: number) => {
       noisy(c, s, '#7d7d7d', seed, 0.14, 0.6);
       const r = rnd(seed + 1);
       for (let i = 0; i < 14; i++) {
@@ -212,7 +234,7 @@ export class TextureAtlas {
 
     // ---- Wood ----
     const log = (seed: number, bark: string, top: string) => ({
-      top: (c: number, s: number) => {
+      top: (c: CanvasRenderingContext2D, s: number) => {
         px(c, s, 0, 0, s, s, top);
         // rings
         const cx = 8, cy = 8;
@@ -221,7 +243,7 @@ export class TextureAtlas {
           if (Math.floor(d) % 2 === 0) px(c, s, x, y, 1, 1, shade(top, -0.12));
         }
       },
-      side: (c: number, s: number) => {
+      side: (c: CanvasRenderingContext2D, s: number) => {
         noisy(c, s, bark, seed, 0.12, 0.6);
         // vertical streaks
         for (let x = 0; x < s; x += 3) px(c, s, x, 0, 1, s, shade(bark, -0.18));

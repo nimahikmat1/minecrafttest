@@ -69,9 +69,11 @@ export class Projectile {
   life = 4;
   active = true;
   mesh: THREE.Mesh;
-  constructor(scene: THREE.Scene, pos: THREE.Vector3, vel: THREE.Vector3) {
+  reg: Registry;
+  constructor(scene: THREE.Scene, pos: THREE.Vector3, vel: THREE.Vector3, reg: Registry) {
     this.pos.copy(pos);
     this.vel.copy(vel);
+    this.reg = reg;
     const geo = new THREE.SphereGeometry(0.12, 8, 8);
     const mat = new THREE.MeshBasicMaterial({ color: 0x66ffcc });
     this.mesh = new THREE.Mesh(geo, mat);
@@ -256,7 +258,7 @@ export class Mob {
           const target = player.pos.clone(); target.y += 0.9;
           const dir = new THREE.Vector3().subVectors(target, from).normalize();
           const vel = dir.multiplyScalar(14);
-          projectiles.push(new Projectile((this as any)._scene, from, vel));
+          projectiles.push(new Projectile((this as any)._scene, from, vel, this.reg));
           this.attackCooldown = 2.2;
         }
       }

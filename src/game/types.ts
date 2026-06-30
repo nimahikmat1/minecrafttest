@@ -35,7 +35,7 @@ export interface ItemType {
   displayName: string;
   block?: BlockId;
   maxStack: number;
-  category: 'block' | 'tool' | 'food' | 'material';
+  category: 'block' | 'tool' | 'food' | 'material' | 'armor';
   toolType?: 'pickaxe' | 'axe' | 'shovel' | 'sword';
   toolTier?: number;
   durability?: number;

@@ -203,7 +203,6 @@ export class Registry {
       hardness: 1,
       tool: 'none',
       toolTier: 0,
-      drops: [],
       solid: true,
       transparent: false,
       liquid: false,
@@ -354,7 +353,7 @@ export class Registry {
     this.item(I.RAW_MEAT, 'raw_meat', 'Raw Meat', { category: 'food', food: 3, iconTile: A.get('raw_meat') });
     this.item(I.COOKED_MEAT, 'cooked_meat', 'Cooked Meat', { category: 'food', food: 8, iconTile: A.get('cooked_meat') });
     // tools
-    const tiers: [ItemId, ItemId, string, number, number, number][] = [
+    const tiers: [ItemId, ItemId, string, number, number, number, number][] = [
       [I.WOOD_PICKAXE, I.WOOD_AXE, 'wood', 1, 60, 2, 0],
       [I.STONE_PICKAXE, I.STONE_AXE, 'stone', 2, 130, 4, 1],
       [I.IRON_PICKAXE, I.IRON_AXE, 'iron', 3, 250, 6, 2],
