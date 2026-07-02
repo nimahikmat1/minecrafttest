@@ -308,6 +308,10 @@ export class WorldGen {
     const existing = chunk.blocks[idx(lx, y, lz)];
     if (existing !== B.AIR && existing !== B.WATER) return;
     chunk.blocks[idx(lx, y, lz)] = b;
+    // update maxSolidY if this block is higher
+    if (b !== B.AIR && b !== B.WATER && b !== B.FLOWING_WATER) {
+      if (y >= chunk.maxSolidY) chunk.maxSolidY = y + 1;
+    }
   }
 
   private placeTree(chunk: ChunkData, wx: number, groundY: number, wz: number, type: string, rnd: number) {
@@ -368,6 +372,10 @@ export class WorldGen {
     if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE) return;
     if (y < 0 || y >= CHUNK_HEIGHT) return;
     if (chunk.blocks[idx(lx, y, lz)] === B.AIR) chunk.blocks[idx(lx, y, lz)] = b;
+    // update maxSolidY if this block is higher (leaves count as solid for meshing bounds)
+    if (b !== B.AIR && b !== B.WATER && b !== B.FLOWING_WATER) {
+      if (y >= chunk.maxSolidY) chunk.maxSolidY = y + 1;
+    }
   }
 
   private setBlockForce(chunk: ChunkData, wx: number, y: number, wz: number, b: number) {
@@ -376,6 +384,10 @@ export class WorldGen {
     if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE) return;
     if (y < 0 || y >= CHUNK_HEIGHT) return;
     chunk.blocks[idx(lx, y, lz)] = b;
+    // update maxSolidY if this block is higher
+    if (b !== B.AIR && b !== B.WATER && b !== B.FLOWING_WATER) {
+      if (y >= chunk.maxSolidY) chunk.maxSolidY = y + 1;
+    }
   }
 
   private placeCactus(chunk: ChunkData, wx: number, groundY: number, wz: number) {
