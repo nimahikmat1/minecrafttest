@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Minecraft Web Clone - Fixed</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; font-family: 'Minecraft', monospace; user-select: none; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 20px; height: 20px; transform: translate(-50%, -50%); pointer-events: none; mix-blend-mode: difference; z-index: 10; }
+        #crosshair::before, #crosshair::after { content: ''; position: absolute; background: white; }
+        #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; }
+        #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; }
+        #ui { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 5px; background: rgba(0,0,0,0.5); padding: 5px; border-radius: 5px; }
+        .slot { width: 40px; height: 40px; border: 2px solid #555; background: rgba(0,0,0,0.3); display: flex; justify-content: center; align-items: center; color: white; font-weight: bold; cursor: pointer; }
+        .slot.active { border-color: white; background: rgba(255,255,255,0.2); }
+        #inventory { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; height: 500px; background: #c6c6c6; border: 4px solid #555; display: none; flex-direction: column; padding: 10px; box-sizing: border-box; z-index: 100; }
+        #inventory h2 { margin: 0 0 10px 0; text-align: center; color: #404040; }
+        #inv-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 5px; flex-grow: 1; }
+        #hotbar-row { display: grid; grid-template-columns: repeat(9, 1fr); gap: 5px; height: 50px; margin-top: 10px; }
+        .inv-slot { background: #8b8b8b; border: 2px solid #373737; border-right-color: #fff; border-bottom-color: #fff; display: flex; justify-content: center; align-items: center; color: white; font-size: 20px; cursor: pointer; position: relative; }
+        .inv-slot:hover { background: #a0a0a0; }
+        #crafting-area { display: none; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-bottom: 10px; justify-items: center; }
+        .craft-slot { width: 40px; height: 40px; background: #8b8b8b; border: 2px solid #373737; border-right-color: #fff; border-bottom-color: #fff; }
+        #crafting-result { width: 40px; height: 40px; background: #c6c6c6; border: 2px solid #fff; border-right-color: #373737; border-bottom-color: #373737; margin-left: 20px; cursor: pointer; }
+        #debug { position: absolute; top: 10px; left: 10px; color: white; font-size: 12px; text-shadow: 1px 1px 0 #000; pointer-events: none; }
+        #start-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; z-index: 200; }
+        button { padding: 10px 20px; font-size: 20px; cursor: pointer; background: #727272; color: white; border: 2px solid #fff; border-right-color: #333; border-bottom-color: #333; font-family: inherit; }
+        button:active { border: 2px solid #333; border-right-color: #fff; border-bottom-color: #fff; }
+        .item-icon { width: 30px; height: 30px; image-rendering: pixelated; }
+    </style>
+</head>
+<body>
+    <div id="start-screen">
+        <h1>MINECRAFT WEB</h1>
+        <p>WASD to Move | SPACE to Jump | E for Inventory | Right Click to Interact | Left Click to Break</p>
+        <button id="start-btn">CLICK TO START</button>
+    </div>
+    <div id="crosshair"></div>
+    <div id="debug">FPS: 0 | Chunks: 0 | Entities: 0</div>
+    <div id="ui"></div>
+    
+    <div id="inventory">
+        <h2 id="inv-title">Inventory</h2>
+        <div id="crafting-area">
+            <div class="craft-slot" data-cx="0" data-cy="0"></div><div class="craft-slot" data-cx="1" data-cy="0"></div><div class="craft-slot" data-cx="2" data-cy="0"></div>
+            <div class="craft-slot" data-cx="0" data-cy="1"></div><div class="craft-slot" data-cx="1" data-cy="1"></div><div class="craft-slot" data-cx="2" data-cy="1"></div>
+            <div class="craft-slot" data-cx="0" data-cy="2"></div><div class="craft-slot" data-cx="1" data-cy="2"></div><div class="craft-slot" data-cx="2" data-cy="2"></div>
+            <div id="crafting-result"></div>
+        </div>
+        <div id="inv-grid"></div>
+        <div id="hotbar-row"></div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+        import { SimplexNoise } from 'three/addons/math/SimplexNoise.js';
+
+        // --- CONFIGURATION ---
+        const RENDER_DISTANCE = 8;
+        const CHUNK_SIZE = 16;
+        const WORLD_HEIGHT = 64;
+        const TEXTURE_RES = 64;
+
+        // --- GLOBALS ---
+        let camera, scene, renderer, controls;
+        let raycaster;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let canJump = false;
+        let prevTime = performance.now();
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+        
+        const chunks = new Map();
+        const activeBlocks = new Map();
+        const entities = [];
+        const particles = [];
+        let inventory = Array(36).fill(null);
+        let selectedSlot = 0;
+        let isInventoryOpen = false;
+        let isCraftingTableOpen = false;
+        let currentCraftingTablePos = null;
+        let gameMode = 'survival';
+        
+        const textures = {};
+        const materials = {};
+        const blockGeometries = {};
+
+        function createTexture(type) {
+            const canvas = document.createElement('canvas');
+            canvas.width = TEXTURE_RES;
+            canvas.height = TEXTURE_RES;
+            const ctx = canvas.getContext('2d');
+            
+            const imageData = ctx.createImageData(TEXTURE_RES, TEXTURE_RES);
+            for (let i = 0; i < imageData.data.length; i += 4) {
+                const noise = (Math.random() - 0.5) * 40;
+                const x = i % (TEXTURE_RES * 4);
+                const y = Math.floor(i / (TEXTURE_RES * 4));
+                let r, g, b;
+                
+                if (type === 'grass_top') {
+                    r = 100 + noise; g = 180 + noise; b = 60 + noise;
+                } else if (type === 'grass_side') {
+                    if (y > TEXTURE_RES * 0.7) {
+                        r = 100 + noise; g = 160 + noise; b = 60 + noise;
+                    } else {
+                        r = 120 + noise; g = 80 + noise; b = 50 + noise;
+                    }
+                } else if (type === 'dirt') {
+                    r = 120 + noise; g = 80 + noise; b = 50 + noise;
+                } else if (type === 'stone') {
+                    r = 100 + noise; g = 100 + noise; b = 100 + noise;
+                } else if (type === 'wood_side') {
+                    r = 90 + noise; g = 60 + noise; b = 30 + noise;
+                    if (x % 64 < 8) { r -= 20; g -= 10; b -= 5; }
+                } else if (type === 'wood_top') {
+                    r = 110 + noise; g = 80 + noise; b = 50 + noise;
+                    const cx = TEXTURE_RES/2, cy = TEXTURE_RES/2;
+                    const dist = Math.sqrt((x-cx)**2 + (y-cy)**2);
+                    if (dist % 10 < 2) { r -= 30; g -= 20; b -= 10; }
+                } else if (type === 'leaves') {
+                    r = 60 + noise; g = 120 + noise; b = 40 + noise;
+                    if (Math.random() > 0.8) { r+=20; g+=20; b+=10; }
+                } else if (type === 'planks') {
+                    r = 140 + noise; g = 100 + noise; b = 60 + noise;
+                    if (y % 16 < 2) { r -= 20; g -= 10; b -= 5; }
+                } else if (type === 'cobblestone') {
+                    r = 90 + noise; g = 90 + noise; b = 90 + noise;
+                    if ((x+y) % 20 < 2) { r-=30; g-=30; b-=30; }
+                } else if (type === 'chest_front') {
+                    r = 140; g = 100; b = 60;
+                } else if (type === 'crafting_top') {
+                    r = 140; g = 100; b = 60;
+                } else {
+                    r = 255; g = 0; b = 255;
+                }
+                
+                imageData.data[i] = Math.max(0, Math.min(255, r));
+                imageData.data[i+1] = Math.max(0, Math.min(255, g));
+                imageData.data[i+2] = Math.max(0, Math.min(255, b));
+                imageData.data[i+3] = 255;
+            }
+            ctx.putImageData(imageData, 0, 0);
+            
+            if (type === 'grass_side') {
+                ctx.fillStyle = 'rgba(100, 180, 60, 0.8)';
+                ctx.fillRect(0, 0, TEXTURE_RES, TEXTURE_RES * 0.3);
+            }
+            if (type === 'chest_front') {
+                ctx.fillStyle = '#333';
+                ctx.fillRect(28, 20, 8, 8);
+                ctx.fillStyle = '#555';
+                ctx.fillRect(0, 2, TEXTURE_RES, 4);
+            }
+            if (type === 'crafting_top') {
+                ctx.strokeStyle = '#5d4037';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(4, 4, TEXTURE_RES-8, TEXTURE_RES-8);
+                ctx.beginPath();
+                for(let i=1; i<4; i++) {
+                    ctx.moveTo(4, 4 + i*15); ctx.lineTo(TEXTURE_RES-4, 4 + i*15);
+                    ctx.moveTo(4 + i*15, 4); ctx.lineTo(4 + i*15, TEXTURE_RES-4);
+                }
+                ctx.stroke();
+            }
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.magFilter = THREE.NearestFilter;
+            tex.minFilter = THREE.NearestFilter;
+            return tex;
+        }
+
+        function initTextures() {
+            textures['grass_top'] = createTexture('grass_top');
+            textures['grass_side'] = createTexture('grass_side');
+            textures['dirt'] = createTexture('dirt');
+            textures['stone'] = createTexture('stone');
+            textures['wood_side'] = createTexture('wood_side');
+            textures['wood_top'] = createTexture('wood_top');
+            textures['leaves'] = createTexture('leaves');
+            textures['planks'] = createTexture('planks');
+            textures['cobblestone'] = createTexture('cobblestone');
+            textures['chest_front'] = createTexture('chest_front');
+            textures['crafting_top'] = createTexture('crafting_top');
+            
+            materials['grass'] = [
+                new THREE.MeshLambertMaterial({ map: textures['grass_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['grass_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['grass_top'] }),
+                new THREE.MeshLambertMaterial({ map: textures['dirt'] }),
+                new THREE.MeshLambertMaterial({ map: textures['grass_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['grass_side'] })
+            ];
+            materials['dirt'] = new THREE.MeshLambertMaterial({ map: textures['dirt'] });
+            materials['stone'] = new THREE.MeshLambertMaterial({ map: textures['stone'] });
+            materials['log'] = [
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_top'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_top'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] })
+            ];
+            materials['leaves'] = new THREE.MeshLambertMaterial({ map: textures['leaves'], transparent: true, opacity: 0.9 });
+            materials['planks'] = new THREE.MeshLambertMaterial({ map: textures['planks'] });
+            materials['cobblestone'] = new THREE.MeshLambertMaterial({ map: textures['cobblestone'] });
+            materials['chest'] = [
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_top'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_top'] }),
+                new THREE.MeshLambertMaterial({ map: textures['chest_front'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] })
+            ];
+            materials['crafting_table'] = [
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['crafting_top'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] }),
+                new THREE.MeshLambertMaterial({ map: textures['wood_side'] })
+            ];
+
+            blockGeometries['default'] = new THREE.BoxGeometry(1, 1, 1);
+        }
+
+        const simplex = new SimplexNoise();
+
+        function getChunkKey(x, z) {
+            return `${Math.floor(x / CHUNK_SIZE)},${Math.floor(z / CHUNK_SIZE)}`;
+        }
+
+        function generateChunk(cx, cz) {
+            const key = getChunkKey(cx, cz);
+            if (chunks.has(key)) return;
+
+            const chunkData = { x: cx, z: cz, meshes: [] };
+            chunks.set(key, chunkData);
+
+            for (let x = 0; x < CHUNK_SIZE; x++) {
+                for (let z = 0; z < CHUNK_SIZE; z++) {
+                    const wx = cx + x;
+                    const wz = cz + z;
+                    
+                    const n = simplex.noise(wx * 0.05, wz * 0.05);
+                    const height = Math.floor((n + 1) * 10 + 20);
+
+                    for (let y = 0; y <= height; y++) {
+                        let type = 'stone';
+                        if (y === height) type = 'grass';
+                        else if (y > height - 4) type = 'dirt';
+                        if (y === 0) type = 'bedrock';
+
+                        addBlock(wx, y, wz, type, true);
+                    }
+
+                    if (wx % 7 === 0 && wz % 7 === 0 && Math.random() > 0.3) {
+                        const treeY = height + 1;
+                        for (let t = 0; t < 4; t++) addBlock(wx, treeY + t, wz, 'log', true);
+                        for (let lx = -2; lx <= 2; lx++) {
+                            for (let lz = -2; lz <= 2; lz++) {
+                                for (let ly = 2; ly <= 4; ly++) {
+                                    if (Math.abs(lx) + Math.abs(lz) + Math.abs(ly-3) < 4) {
+                                        if (!getBlock(wx+lx, treeY+ly, wz+lz)) {
+                                            addBlock(wx+lx, treeY+ly, wz+lz, 'leaves', true);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function addBlock(x, y, z, type, isGeneration = false) {
+            const key = `${x},${y},${z}`;
+            if (activeBlocks.has(key) && !isGeneration) return;
+
+            let mat = materials[type] || materials['stone'];
+            if (type === 'bedrock') mat = materials['stone'];
+
+            const mesh = new THREE.Mesh(blockGeometries['default'], mat);
+            mesh.position.set(x, y, z);
+            mesh.userData = { isBlock: true, type: type, x, y, z };
+            
+            scene.add(mesh);
+            activeBlocks.set(key, mesh);
+            
+            if (!isGeneration) {
+                const ck = getChunkKey(x, z);
+                if (chunks.has(ck)) chunks.get(ck).meshes.push(mesh);
+            }
+            return mesh;
+        }
+
+        function removeBlock(x, y, z) {
+            const key = `${x},${y},${z}`;
+            const mesh = activeBlocks.get(key);
+            if (mesh) {
+                spawnBreakParticles(x, y, z, mesh.material);
+                
+                if (gameMode !== 'creative') {
+                    spawnItemEntity(mesh.userData.type, x + 0.5, y + 0.5, z + 0.5);
+                }
+
+                scene.remove(mesh);
+                activeBlocks.delete(key);
+                playSound('break');
+            }
+        }
+
+        function getBlock(x, y, z) {
+            return activeBlocks.get(`${x},${y},${z}`);
+        }
+
+        function spawnBreakParticles(x, y, z, material) {
+            const count = 8;
+            const geo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+            
+            for (let i = 0; i < count; i++) {
+                const mesh = new THREE.Mesh(geo, material);
+                mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+                mesh.userData = {
+                    velocity: new THREE.Vector3(
+                        (Math.random() - 0.5) * 0.2,
+                        (Math.random() * 0.2) + 0.1,
+                        (Math.random() - 0.5) * 0.2
+                    ),
+                    life: 1.0,
+                    isParticle: true
+                };
+                scene.add(mesh);
+                particles.push(mesh);
+            }
+        }
+
+        function spawnItemEntity(type, x, y, z) {
+            const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+            let mat = materials[type] || materials['stone'];
+            if (Array.isArray(mat)) mat = mat[0];
+            
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, y, z);
+            mesh.userData = { 
+                isItem: true, 
+                itemType: type, 
+                velocity: new THREE.Vector3(0, 0.1, 0),
+                life: 300
+            };
+            scene.add(mesh);
+            entities.push(mesh);
+        }
+
+        class Mob {
+            constructor(type, x, y, z) {
+                this.type = type;
+                this.mesh = new THREE.Group();
+                
+                const color = type === 'sheep' ? 0xFFFFFF : (type === 'cow' ? 0x442200 : 0xEEEEEE);
+                const mat = new THREE.MeshLambertMaterial({ color: color });
+                
+                const bodyGeo = new THREE.BoxGeometry(0.6, 0.6, 0.9);
+                const body = new THREE.Mesh(bodyGeo, mat);
+                body.position.y = 0.6;
+                
+                const headGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+                const head = new THREE.Mesh(headGeo, mat);
+                head.position.set(0, 1.0, 0.4);
+                
+                this.mesh.add(body);
+                this.mesh.add(head);
+                
+                this.mesh.position.set(x, y, z);
+                scene.add(this.mesh);
+                
+                this.velocity = new THREE.Vector3();
+                this.onGround = false;
+                this.moveTimer = 0;
+                this.moveDir = new THREE.Vector3();
+                entities.push(this.mesh);
+                this.mesh.userData = { isMob: true, mobRef: this };
+            }
+
+            update(dt, playerPos) {
+                this.velocity.y -= 0.02;
+                
+                this.moveTimer--;
+                if (this.moveTimer <= 0) {
+                    this.moveTimer = 60 + Math.random() * 60;
+                    const angle = Math.random() * Math.PI * 2;
+                    this.moveDir.set(Math.cos(angle), 0, Math.sin(angle));
+                    
+                    const bx = Math.floor(this.mesh.position.x + this.moveDir.x * 2);
+                    const bz = Math.floor(this.mesh.position.z + this.moveDir.z * 2);
+                    const by = Math.floor(this.mesh.position.y - 1);
+                    const blockBelow = getBlock(bx, by, bz);
+                    
+                    if (!blockBelow || blockBelow.userData.type === 'water') {
+                        this.moveDir.negate();
+                    }
+                }
+
+                this.mesh.position.x += this.moveDir.x * 0.03;
+                this.mesh.position.z += this.moveDir.z * 0.03;
+                
+                const nextY = this.mesh.position.y + this.velocity.y;
+                const footY = Math.floor(nextY - 0.1);
+                const headY = Math.floor(nextY + 1.0);
+                const bx = Math.floor(this.mesh.position.x);
+                const bz = Math.floor(this.mesh.position.z);
+                
+                const blockBelow = getBlock(bx, footY, bz);
+                const blockHead = getBlock(bx, headY, bz);
+
+                if (blockBelow && this.velocity.y <= 0) {
+                    this.mesh.position.y = footY + 1.1;
+                    this.velocity.y = 0;
+                    this.onGround = true;
+                } else {
+                    this.mesh.position.y += this.velocity.y;
+                    this.onGround = false;
+                }
+                
+                if (blockHead && this.velocity.y > 0) {
+                    this.velocity.y = 0;
+                }
+
+                if (this.mesh.position.y < -10) {
+                    this.remove();
+                }
+            }
+            
+            remove() {
+                scene.remove(this.mesh);
+                const idx = entities.indexOf(this.mesh);
+                if (idx > -1) entities.splice(idx, 1);
+            }
+        }
+
+        function spawnMob(type, x, y, z) {
+            new Mob(type, x, y, z);
+        }
+
+        function setupInputs() {
+            const startBtn = document.getElementById('start-btn');
+            const startScreen = document.getElementById('start-screen');
+            
+            startBtn.addEventListener('click', () => {
+                startScreen.style.display = 'none';
+                controls.lock();
+            });
+
+            controls.addEventListener('lock', () => {
+                isInventoryOpen = false;
+                document.getElementById('inventory').style.display = 'none';
+                document.body.requestPointerLock();
+            });
+
+            controls.addEventListener('unlock', () => {
+                if (!isInventoryOpen) {
+                }
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (isInventoryOpen && e.code !== 'KeyE') return;
+
+                switch (e.code) {
+                    case 'ArrowUp': case 'KeyW': moveForward = true; break;
+                    case 'ArrowLeft': case 'KeyA': moveLeft = true; break;
+                    case 'ArrowDown': case 'KeyS': moveBackward = true; break;
+                    case 'ArrowRight': case 'KeyD': moveRight = true; break;
+                    case 'Space': if (canJump) { velocity.y += 0.15; canJump = false; } break;
+                    case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': case 'Digit5': 
+                    case 'Digit6': case 'Digit7': case 'Digit8': case 'Digit9': 
+                        selectedSlot = parseInt(e.key) - 1; updateUI(); break;
+                    case 'KeyE': toggleInventory(); break;
+                }
+            });
+
+            document.addEventListener('keyup', (e) => {
+                switch (e.code) {
+                    case 'ArrowUp': case 'KeyW': moveForward = false; break;
+                    case 'ArrowLeft': case 'KeyA': moveLeft = false; break;
+                    case 'ArrowDown': case 'KeyS': moveBackward = false; break;
+                    case 'ArrowRight': case 'KeyD': moveRight = false; break;
+                }
+            });
+
+            document.addEventListener('mousedown', (e) => {
+                if (!controls.isLocked || isInventoryOpen) return;
+
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const intersects = raycaster.intersectObjects(scene.children);
+                const blockIntersects = intersects.filter(i => i.object.userData.isBlock);
+
+                if (blockIntersects.length > 0) {
+                    const hit = blockIntersects[0];
+                    const { x, y, z } = hit.object.userData;
+                    const normal = hit.face.normal;
+
+                    if (e.button === 2) {
+                        handleInteraction(x, y, z, hit.object.userData.type, normal);
+                    } else if (e.button === 0) {
+                        if (gameMode === 'creative' || inventory[selectedSlot]) {
+                            removeBlock(x, y, z);
+                        }
+                    }
+                }
+            });
+
+            document.addEventListener('contextmenu', e => e.preventDefault());
+        }
+
+        function handleInteraction(x, y, z, type, normal) {
+            if (type === 'chest') {
+                alert("Chest Opened!");
+            } else if (type === 'crafting_table') {
+                openCraftingTable(x, y, z);
+            } else if (type === 'furnace') {
+                alert("Furnace Opened!");
+            } else {
+                const nx = x + normal.x;
+                const ny = y + normal.y;
+                const nz = z + normal.z;
+                
+                if (!getBlock(nx, ny, nz)) {
+                    const itemType = inventory[selectedSlot];
+                    if (itemType) {
+                        addBlock(nx, ny, nz, itemType);
+                        if (gameMode !== 'creative') {
+                            inventory[selectedSlot] = null;
+                            updateUI();
+                        }
+                        playSound('place');
+                    }
+                }
+            }
+        }
+
+        function toggleInventory() {
+            isInventoryOpen = !isInventoryOpen;
+            const invDiv = document.getElementById('inventory');
+            if (isInventoryOpen) {
+                controls.unlock();
+                invDiv.style.display = 'flex';
+                renderInventory();
+            } else {
+                controls.lock();
+                invDiv.style.display = 'none';
+                if (isCraftingTableOpen) closeCraftingTable();
+            }
+        }
+
+        function openCraftingTable(x, y, z) {
+            isCraftingTableOpen = true;
+            currentCraftingTablePos = {x, y, z};
+            document.getElementById('inv-title').innerText = "Crafting";
+            document.getElementById('crafting-area').style.display = 'grid';
+            toggleInventory();
+        }
+
+        function closeCraftingTable() {
+            isCraftingTableOpen = false;
+            currentCraftingTablePos = null;
+            document.getElementById('inv-title').innerText = "Inventory";
+            document.getElementById('crafting-area').style.display = 'none';
+        }
+
+        function updateUI() {
+            const ui = document.getElementById('ui');
+            ui.innerHTML = '';
+            for (let i = 0; i < 9; i++) {
+                const slot = document.createElement('div');
+                slot.className = `slot ${i === selectedSlot ? 'active' : ''}`;
+                const item = inventory[i];
+                if (item) {
+                    slot.style.backgroundColor = getItemColor(item);
+                    slot.innerText = item.substring(0, 1).toUpperCase();
+                }
+                ui.appendChild(slot);
+            }
+        }
+
+        function getItemColor(type) {
+            if (type.includes('wood') || type.includes('planks')) return '#8B4513';
+            if (type.includes('stone') || type.includes('cobble')) return '#808080';
+            if (type.includes('dirt')) return '#8B4513';
+            if (type.includes('grass')) return '#228B22';
+            if (type.includes('leaves')) return '#006400';
+            if (type === 'chest') return '#A0522D';
+            if (type === 'crafting_table') return '#DEB887';
+            return '#FFF';
+        }
+
+        function renderInventory() {
+            const grid = document.getElementById('inv-grid');
+            const hotbar = document.getElementById('hotbar-row');
+            grid.innerHTML = '';
+            hotbar.innerHTML = '';
+
+            for (let i = 9; i < 36; i++) {
+                createInvSlot(grid, i);
+            }
+            for (let i = 0; i < 9; i++) {
+                createInvSlot(hotbar, i);
+            }
+        }
+
+        function createInvSlot(container, index) {
+            const div = document.createElement('div');
+            div.className = 'inv-slot';
+            const item = inventory[index];
+            if (item) {
+                div.style.backgroundColor = getItemColor(item);
+                div.innerText = item.substring(0, 1).toUpperCase();
+            }
+            div.onclick = () => {
+                if (selectedSlot !== index) {
+                    const temp = inventory[selectedSlot];
+                    inventory[selectedSlot] = inventory[index];
+                    inventory[index] = temp;
+                    updateUI();
+                    renderInventory();
+                }
+            };
+            container.appendChild(div);
+        }
+
+        inventory[0] = 'dirt';
+        inventory[1] = 'stone';
+        inventory[2] = 'planks';
+        inventory[3] = 'crafting_table';
+        inventory[4] = 'chest';
+        updateUI();
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'break') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'place') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+            }
+        }
+
+        let lastClickTime = 0;
+        document.addEventListener('mousedown', () => { lastClickTime = Date.now(); });
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
+            prevTime = time;
+
+            if (controls.isLocked && !isInventoryOpen) {
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+                velocity.y -= 0.05;
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize();
+
+                if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
+
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+                
+                const px = camera.position.x;
+                const py = camera.position.y;
+                const pz = camera.position.z;
+                
+                const bx = Math.floor(px);
+                const by = Math.floor(py - 1.5);
+                const bz = Math.floor(pz);
+                
+                const blockBelow = getBlock(bx, by, bz);
+                const blockHead = getBlock(bx, Math.floor(py + 0.2), bz);
+
+                if (blockBelow && velocity.y <= 0) {
+                    camera.position.y = by + 1 + 1.5;
+                    velocity.y = 0;
+                    canJump = true;
+                } else {
+                    camera.position.y += velocity.y * delta;
+                }
+                
+                if (blockHead && velocity.y > 0) {
+                    velocity.y = 0;
+                }
+
+                const cx = Math.floor(px / CHUNK_SIZE) * CHUNK_SIZE;
+                const cz = Math.floor(pz / CHUNK_SIZE) * CHUNK_SIZE;
+                
+                for (let x = -RENDER_DISTANCE; x <= RENDER_DISTANCE; x++) {
+                    for (let z = -RENDER_DISTANCE; z <= RENDER_DISTANCE; z++) {
+                        generateChunk(cx + x * CHUNK_SIZE, cz + z * CHUNK_SIZE);
+                    }
+                }
+            }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.userData.life -= delta;
+                p.position.add(p.userData.velocity);
+                p.userData.velocity.y -= 0.01;
+                p.rotation.x += 0.1;
+                p.rotation.y += 0.1;
+                if (p.userData.life <= 0) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                }
+            }
+
+            for (let i = entities.length - 1; i >= 0; i--) {
+                const e = entities[i];
+                if (e.userData.isMob) {
+                    e.userData.mobRef.update(delta, camera.position);
+                } else if (e.userData.isItem) {
+                    e.userData.velocity.y -= 0.01;
+                    e.position.add(e.userData.velocity);
+                    e.rotation.y += 0.05;
+                    
+                    const bx = Math.floor(e.position.x);
+                    const by = Math.floor(e.position.y - 0.2);
+                    const bz = Math.floor(e.position.z);
+                    if (getBlock(bx, by, bz)) {
+                        e.position.y = by + 0.5;
+                        e.userData.velocity.y = 0;
+                    }
+
+                    const dist = e.position.distanceTo(camera.position);
+                    if (dist < 1.0) {
+                        const type = e.userData.itemType;
+                        let picked = false;
+                        for(let s=0; s<36; s++) {
+                            if (!inventory[s]) {
+                                inventory[s] = type;
+                                picked = true;
+                                break;
+                            }
+                        }
+                        if (picked) {
+                            playSound('place');
+                            scene.remove(e);
+                            entities.splice(i, 1);
+                            updateUI();
+                        }
+                    }
+                    
+                    e.userData.life--;
+                    if (e.userData.life <= 0) {
+                        scene.remove(e);
+                        entities.splice(i, 1);
+                    }
+                }
+            }
+
+            if (!camera.userData.hand) {
+                const handGroup = new THREE.Group();
+                
+                const armGeo = new THREE.BoxGeometry(0.25, 0.75, 0.25);
+                const armMat = new THREE.MeshBasicMaterial({ color: 0xDDAA88 });
+                const arm = new THREE.Mesh(armGeo, armMat);
+                arm.position.set(0, -0.3, -0.5);
+                
+                const sleeveGeo = new THREE.BoxGeometry(0.26, 0.4, 0.26);
+                const sleeveMat = new THREE.MeshBasicMaterial({ color: 0x3F3F7F });
+                const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
+                sleeve.position.set(0, -0.55, -0.5);
+                
+                handGroup.add(arm);
+                handGroup.add(sleeve);
+                
+                camera.add(handGroup);
+                camera.userData.hand = handGroup;
+            }
+            
+            const hand = camera.userData.hand;
+            hand.position.set(0.4, -0.4, -0.6);
+            hand.rotation.set(0, 0, 0);
+            
+            if (Date.now() - lastClickTime < 200) {
+                hand.rotation.x = -0.5;
+                hand.position.z = -0.4;
+            }
+
+            document.getElementById('debug').innerText = 
+                `FPS: ${Math.round(1/delta)} | Chunks: ${chunks.size} | Entities: ${entities.length}`;
+
+            renderer.render(scene, camera);
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.Fog(0x87CEEB, 10, RENDER_DISTANCE * CHUNK_SIZE - 5);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.y = 30;
+
+            renderer = new THREE.WebGLRenderer({ antialias: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            controls = new PointerLockControls(camera, document.body);
+            
+            raycaster = new THREE.Raycaster();
+            raycaster.far = 6;
+
+            initTextures();
+            setupInputs();
+
+            generateChunk(0, 0);
+            generateChunk(16, 0);
+            generateChunk(-16, 0);
+            generateChunk(0, 16);
+            generateChunk(0, -16);
+
+            spawnMob('sheep', 5, 30, 5);
+            spawnMob('cow', -5, 30, -5);
+            spawnMob('chicken', 2, 30, -2);
+
+            const ambientLight = new THREE.AmbientLight(0xcccccc, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(50, 100, 50);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            animate();
+        }
+
+        init();
+    </script>
+</body>
+</html>
