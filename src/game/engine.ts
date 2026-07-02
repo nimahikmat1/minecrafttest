@@ -853,6 +853,7 @@ export class VoxelEngine {
       const tb = this.world.getBlock(this.target.x, this.target.y, this.target.z);
       if (tb === B.CRAFTING_TABLE) { this.openCraftingTable(); return; }
       if (tb === B.FURNACE) { this.openFurnace(this.target.x, this.target.y, this.target.z); return; }
+      if (tb === B.CHEST) { this.openChest(this.target.x, this.target.y, this.target.z); return; }
     }
 
     if (!stack || !item) return;
