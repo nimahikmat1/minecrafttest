@@ -82,6 +82,8 @@ export class VoxelEngine {
   furnaceOpen = false;
   furnacePos: [number, number, number] = [0, 0, 0];
   furnace = { input: null as ItemStack | null, fuel: null as ItemStack | null, output: null as ItemStack | null, burn: 0, progress: 0, maxProgress: 10 };
+  chestOpen = false;
+  chestPos: [number, number, number] = [0, 0, 0];
   held: ItemStack | null = null;
 
   selected = 0;
@@ -178,23 +180,26 @@ export class VoxelEngine {
     this.handGroup = new THREE.Group();
     this.viewModelScene.add(this.handGroup);
     // arm (hand) — Minecraft-style arm, positioned at bottom-right
-    // Arm dimensions: 4x12x4 pixels = 0.25 x 0.75 x 0.25 blocks
+    // Arm dimensions: 4x12x4 pixels = 0.25 x 0.75 x 0.25 blocks (scaled to block units)
+    // Actual Minecraft arm: 4 pixels wide, 12 pixels tall, 4 pixels deep
+    // In block units: 4/16 = 0.25 wide, 12/16 = 0.75 tall, 4/16 = 0.25 deep
     const armGroup = new THREE.Group();
-    const armGeo = new THREE.BoxGeometry(0.2, 0.6, 0.2);
-    const armMat = new THREE.MeshLambertMaterial({ color: 0xe8b890 });
+    const armGeo = new THREE.BoxGeometry(0.25, 0.75, 0.25);
+    const armMat = new THREE.MeshLambertMaterial({ color: 0xe8b890 }); // skin tone
     const armMesh = new THREE.Mesh(armGeo, armMat);
-    armMesh.position.set(0, -0.3, 0); // pivot at top (shoulder)
+    armMesh.position.set(0, -0.375, 0); // pivot at top (shoulder), center of arm
     armGroup.add(armMesh);
-    // sleeve (shirt color)
-    const sleeveGeo = new THREE.BoxGeometry(0.21, 0.24, 0.21);
-    const sleeveMat = new THREE.MeshLambertMaterial({ color: 0x4a7ac0 });
+    // sleeve (shirt color) - covers lower part of arm
+    const sleeveGeo = new THREE.BoxGeometry(0.255, 0.35, 0.255); // slightly larger to avoid z-fighting
+    const sleeveMat = new THREE.MeshLambertMaterial({ color: 0x4a7ac0 }); // blue shirt
     const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
-    sleeve.position.set(0, -0.12, 0);
+    sleeve.position.set(0, -0.15, 0); // positioned at bottom half of arm
     armGroup.add(sleeve);
     // position arm at bottom-right, angled so it points forward and down
-    armGroup.position.set(0.38, -0.42, -0.72);
-    armGroup.rotation.x = Math.PI * 0.42; // arm hangs down-forward
-    armGroup.rotation.z = -0.12;
+    // Minecraft arm position: slightly to the right, below camera, pointing forward
+    armGroup.position.set(0.42, -0.45, -0.65);
+    armGroup.rotation.x = Math.PI * 0.35; // arm hangs down-forward
+    armGroup.rotation.z = -0.08;
     this.armMesh = armGroup;
     this.handGroup.add(armGroup);
 
@@ -386,6 +391,7 @@ export class VoxelEngine {
     }
     if (code === 'Escape') {
       if (this.furnaceOpen) { this.closeFurnace(); }
+      else if (this.chestOpen) { this.closeChest(); }
       else if (this.inventoryOpen) { this.closeInventory(); }
       else { this.togglePause(); }
       return;
@@ -439,6 +445,7 @@ export class VoxelEngine {
   // ----------------- inventory / crafting UI -----------------
   toggleInventory() {
     if (this.furnaceOpen) { this.closeFurnace(); return; }
+    if (this.chestOpen) { this.closeChest(); return; }
     if (this.inventoryOpen) { this.closeInventory(); return; }
     this.inventoryOpen = true;
     this.craftSize = 2;
@@ -452,6 +459,7 @@ export class VoxelEngine {
     // and furnaceOpen doesn't stay stuck true (which would leak furnace slots
     // into whatever UI opens next).
     if (this.furnaceOpen) { this.closeFurnace(); return; }
+    if (this.chestOpen) { this.closeChest(); return; }
     // return held + crafting grid items to inventory
     if (this.held) { this.inv.add(this.held); this.held = null; }
     for (let i = 0; i < this.craftGrid.length; i++) {
@@ -487,6 +495,19 @@ export class VoxelEngine {
     this.inventoryOpen = false;
     this.markDirty();
   }
+  openChest(x: number, y: number, z: number) {
+    this.chestOpen = true;
+    this.chestPos = [x, y, z];
+    this.inventoryOpen = true;
+    if (this.pointerLocked) document.exitPointerLock();
+    this.markDirty();
+  }
+  closeChest() {
+    if (this.held) { this.inv.add(this.held); this.held = null; }
+    this.chestOpen = false;
+    this.inventoryOpen = false;
+    this.markDirty();
+  }
 
   togglePause() {
     this.paused = !this.paused;
@@ -501,7 +522,7 @@ export class VoxelEngine {
     this.markDirty();
   }
 
-  // slot id scheme: 0..35 inventory; 100..(100+craftSize^2-1) craft; 200 output; 300 furnace input; 301 fuel; 302 furnace output
+  // slot id scheme: 0..35 inventory; 100..(100+craftSize^2-1) craft; 200 output; 300 furnace input; 301 fuel; 302 furnace output; 400 chest
   private getSlot(id: number): ItemStack | null {
     if (id >= 0 && id < 36) return this.inv.slots[id] ?? null;
     if (id >= 100 && id < 100 + this.craftGrid.length) return this.craftGrid[id - 100] ?? null;
@@ -510,6 +531,14 @@ export class VoxelEngine {
       if (id === 300) return this.furnace.input;
       if (id === 301) return this.furnace.fuel;
       if (id === 302) return this.furnace.output;
+    }
+    if (this.chestOpen) {
+      // chest uses slots 400-426 (27 slots like Minecraft chest)
+      if (id >= 400 && id < 427) {
+        const chestIndex = id - 400;
+        // For now, use a simple temporary chest storage
+        return (this as any)._chestItems?.[chestIndex] ?? null;
+      }
     }
     return null;
   }
@@ -521,6 +550,14 @@ export class VoxelEngine {
       if (id === 300) { this.furnace.input = val; return; }
       if (id === 301) { this.furnace.fuel = val; return; }
       if (id === 302) { this.furnace.output = val; return; }
+    }
+    if (this.chestOpen) {
+      if (id >= 400 && id < 427) {
+        const chestIndex = id - 400;
+        if (!(this as any)._chestItems) (this as any)._chestItems = new Array(27).fill(null);
+        (this as any)._chestItems[chestIndex] = val;
+        return;
+      }
     }
   }
   private isOutput(id: number): boolean { return id === 200; }

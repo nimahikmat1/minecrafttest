@@ -1,65 +1,45 @@
-```typescript
-# Build outputs
+```gitignore
+# Compiled and build artifacts
+*.js.map
+*.tsbuildinfo
 dist/
 build/
-out/
+*.o
+*.obj
+*.pyc
+__pycache__/
 
 # Dependencies
 node_modules/
-
-# Logs
-*.log
-
-# Environment
+.venv/
+venv/
 .env
 .env.local
 *.env.*
 
-# Editor files
+# Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *.tmp
 
-# OS files
+# Logs
+*.log
+
+# System
 .DS_Store
 Thumbs.db
 
-# Coverage reports
+# Testing and coverage
+.coverage
 coverage/
 htmlcov/
-.coverage
+.mypy_cache/
+.pytest_cache/
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Virtual environments
-venv/
-.venv/
-env/
-ENV/
-
-# TypeScript/JavaScript
-*.tsbuildinfo
-.next/
-.nuxt/
-public/
-!.gitkeep
-
-# Compiled files
-*.exe
-*.dll
-*.so
-*.a
-*.obj
-*.out
-*.class
-
-# Compressed files
+# Distribution packages
+*.tar.gz
 *.zip
 *.gz
 *.tar
@@ -69,35 +49,4 @@ public/
 *.7z
 *.rar
 *.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
-
-# Test and coverage
-.mypy_cache/
-.pytest_cache/
-.jest/
-coverage/
-
-# Gradle
-.gradle/
-build/
-
-# Maven
-target/
-
-# Temporary files
-tmp/
-temp/
-.DS_Store
 ```
